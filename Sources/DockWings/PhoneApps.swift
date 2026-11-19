@@ -24,7 +24,7 @@ final class PhoneApps: ObservableObject {
 
     private static let state = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/ios-refresh")
     private static let log = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/ios-refresh.log")
-    static let job = "com.thomas.ios-refresh"
+    static let job = "local.ios-refresh"
 
     init() {
         if Config.demo == "a" {
