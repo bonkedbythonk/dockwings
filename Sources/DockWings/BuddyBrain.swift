@@ -833,9 +833,9 @@ enum Brain {
     /// The shortest a frame may show while a move is sped up; past this the
     /// stride stretches instead (fast climbs and crawls).
     static let quickestFrame = 0.05
-    /// Gaits on the ground never cycle faster than the art's own timing: a
-    /// faster move stretches the stride instead.
-    static let steadyGaits: Set<String> = ["Walk", "Run", "Dash", "Creep"]
+    /// Gaits never cycle faster than the art's own timing (on the ground,
+    /// up walls and along the top alike): a faster move stretches the stride.
+    static let steadyGaits: Set<String> = ["Walk", "Run", "Dash", "Creep", "ClimbWall", "ClimbCeiling"]
 
     /// Position keys for moving from `p` to `q` in `seconds`, driven by each
     /// frame's velocity: frames with none hold still, the others cover the
