@@ -608,7 +608,11 @@ private struct RadicalImage: View {
             if let image { Image(nsImage: image).resizable().renderingMode(.template).scaledToFit().foregroundStyle(.white) }
         }
         .task {
-            guard let (data, _) = try? await URLSession.shared.data(from: url), let svg = NSImage(data: data) else { return }
+            // The SVG strokes with CSS `var(--color-text, #000)`, which macOS doesn't draw; use plain black.
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let text = String(data: data, encoding: .utf8),
+                  let svg = NSImage(data: Data(text.replacingOccurrences(of: #"var\(--[\w-]+,\s*([^)]+)\)"#, with: "$1",
+                                                                        options: .regularExpression).utf8)) else { return }
             svg.isTemplate = true
             image = svg
         }
