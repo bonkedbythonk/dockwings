@@ -61,4 +61,4 @@ Personal project, no support promised. Built and tested on an Apple silicon Mac;
 
 `defaults write local.dockwings Demo a` (or `b`, `cycle`) fills every widget with made-up data, which is where the screenshots above come from; `defaults delete local.dockwings Demo` turns it off.
 
-Licensed under [GPLv3](LICENSE).
+Copyright (C) 2026 Thomas. Licensed under [GPLv3](LICENSE).
