@@ -604,10 +604,12 @@ private struct RadicalImage: View {
     @State private var image: NSImage?
 
     var body: some View {
-        Group {
+        // Not a Group: an empty one never runs its task.
+        ZStack {
             if let image { Image(nsImage: image).resizable().renderingMode(.template).scaledToFit().foregroundStyle(.white) }
         }
-        .task {
+        .task(id: url) {
+            image = nil
             // The SVG strokes with CSS `var(--color-text, #000)`, which macOS doesn't draw; use plain black.
             guard let (data, _) = try? await URLSession.shared.data(from: url),
                   let text = String(data: data, encoding: .utf8),
