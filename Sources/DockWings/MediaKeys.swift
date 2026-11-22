@@ -135,8 +135,8 @@ private enum Volume {
     @MainActor private static let glide = Glide(read: { device.map { get($0).volume } ?? 0 },
                                                 write: { v in if let d = device { set(d, v) } })
 
-    /// Volume changed anywhere else (AirPods, the menu bar, other apps):
-    /// the HUD shows it too. Follows the output device when it changes.
+    /// Volume changed anywhere else (the menu bar, other apps): the HUD shows
+    /// it too, except for AirPods swipes (`isSwipe`). Follows the output device when it changes.
     @MainActor
     static func watchOutside() {
         var system = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -150,7 +150,7 @@ private enum Volume {
     @MainActor private static var listening: AudioObjectID?
     /// CoreAudio also notifies when nothing changed (device wakes, playback starts),
     /// and AirPods ramp the volume by themselves in 1-2% steps (Conversation Awareness,
-    /// Personalized Volume): neither shows. Sliders and stem swipes jump further.
+    /// Personalized Volume): neither shows. Sliders jump further.
     @MainActor private static var last: (volume: Float, muted: Bool)?
     @MainActor private static let changed: AudioObjectPropertyListenerBlock = { _, _ in
         MainActor.assumeIsolated {
@@ -159,8 +159,16 @@ private enum Volume {
             defer { last = now }
             guard glide.target == nil, let last,  // own key presses show themselves
                   abs(now.volume - last.volume) > 0.035 || now.muted != last.muted else { return }
+            if now.muted == last.muted, isSwipe(from: last.volume, to: now.volume) { return }
             MediaKeys.show(volume: now.volume, muted: now.muted)
         }
+    }
+
+    /// A swipe on AirPods: macOS shows its own banner, which can't be hidden, so the
+    /// notch stays quiet. Bluetooth volume comes in 1/127 steps, a swipe moves 8 of them.
+    private static func isSwipe(from old: Float, to new: Float) -> Bool {
+        let steps = new * 127
+        return abs(steps - steps.rounded()) < 0.001 && abs(new - old) < 8.5 / 127 && headphoneSymbol != nil
     }
 
     @MainActor
