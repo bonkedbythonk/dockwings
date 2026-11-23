@@ -165,10 +165,11 @@ private enum Volume {
     }
 
     /// A swipe on AirPods: macOS shows its own banner, which can't be hidden, so the
-    /// notch stays quiet. Bluetooth volume comes in 1/127 steps, a swipe moves 8 of them.
+    /// notch stays quiet. Bluetooth volume comes in 1/127 steps; a swipe moves 8 of
+    /// them, a bit more when the volume was between two steps.
     private static func isSwipe(from old: Float, to new: Float) -> Bool {
         let steps = new * 127
-        return abs(steps - steps.rounded()) < 0.001 && abs(new - old) < 8.5 / 127 && headphoneSymbol != nil
+        return abs(steps - steps.rounded()) < 0.001 && abs(new - old) < 9.5 / 127 && headphoneSymbol != nil
     }
 
     @MainActor
