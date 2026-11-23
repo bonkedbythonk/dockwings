@@ -61,16 +61,18 @@ final class PhoneApps: ObservableObject {
         .sorted { $0.expires < $1.expires }
         let names = expiring.map(\.name)
         let onTV = names.allSatisfy(Self.tvApps.contains)
+        let refreshed = Dictionary(uniqueKeysWithValues: expiring.map { ($0.name, $0.expires.addingTimeInterval(-7 * 86400)) })
         let next = expiring.first.map {
-            Status(apps: names.map(Self.displayName), onTV: onTV, expires: $0.expires, reason: Self.reason(for: Set(names), onTV: onTV))
+            Status(apps: names.map(Self.displayName), onTV: onTV, expires: $0.expires, reason: Self.reason(for: refreshed, onTV: onTV))
         }
         if next != status { status = next }
     }
 
     private static func displayName(_ app: String) -> String { app == "anicat-tv" ? "Anicat TV" : app.capitalized }
 
-    /// Why these apps weren't refreshed, from the latest log line that names one of them.
-    private static func reason(for apps: Set<String>, onTV: Bool) -> String {
+    /// Why these apps weren't refreshed, from the latest log line that names one of
+    /// them and is newer than that app's last refresh (a run by hand isn't logged).
+    private static func reason(for refreshed: [String: Date], onTV: Bool) -> String {
         guard let handle = try? FileHandle(forReadingFrom: log) else { return "Not refreshed" }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
@@ -78,7 +80,13 @@ final class PhoneApps: ObservableObject {
         let lines = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
         if lines.suffix(4).contains(where: { $0.contains("command not found") }) { return "Refresh script error" }
         // Log lines name the app as a whole word: "anicat refreshed", "skipping anicat-tv".
-        let line = lines.last { $0.split(whereSeparator: { $0 == " " || $0 == "," }).contains { apps.contains(String($0)) } }
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        stamp.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let line = lines.last { line in
+            guard let time = stamp.date(from: String(line.prefix(19))) else { return false }
+            return line.split(whereSeparator: { $0 == " " || $0 == "," }).contains { (refreshed[String($0)] ?? .distantFuture) < time }
+        }
         guard let line else { return "Not refreshed" }
         if line.contains("FAILED") { return "Refresh failed" }
         if line.contains("not reachable") || line.contains("expires soon") { return onTV ? "Apple TV not reachable" : "Phone not reachable" }
