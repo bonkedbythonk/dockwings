@@ -2,8 +2,8 @@
 // apps stop opening. tools/ios-refresh re-signs them (free signing lasts 7 days)
 // and writes the Unix time of each app's last refresh to
 // ~/Library/Application Support/ios-refresh/<app>; it refreshes after 4 days,
-// so the widget only shows once an app has under 3 days left, which means the
-// refresh didn't happen. The reason comes from the latest line about those apps
+// so the widget only shows once an app is 6 hours past that (66 hours left),
+// which means the refresh didn't happen. The reason comes from the latest line about those apps
 // in ~/Library/Logs/ios-refresh.log. Red under a day. Clicking runs the refresh
 // job now. Checked every minute (a few small file reads).
 import AppKit
@@ -14,7 +14,7 @@ final class PhoneApps: ObservableObject {
     static let shared = PhoneApps()
 
     struct Status: Equatable {
-        /// Apps under 3 days left, soonest first.
+        /// Apps 6 hours or more overdue for a refresh, soonest to expire first.
         let apps: [String]
         /// All of them are on the Apple TV.
         let onTV: Bool
@@ -57,7 +57,7 @@ final class PhoneApps: ObservableObject {
             else { return nil }
             return (url.lastPathComponent, Date(timeIntervalSince1970: seconds + 7 * 86400))
         }
-        .filter { $0.expires.timeIntervalSinceNow < 3 * 86400 }
+        .filter { $0.expires.timeIntervalSinceNow < 66 * 3600 }
         .sorted { $0.expires < $1.expires }
         let names = expiring.map(\.name)
         let onTV = names.allSatisfy(Self.tvApps.contains)
