@@ -112,7 +112,7 @@ final class Notch: ObservableObject {
     }
     static let lockSafe: Set<String> = ["hud", "power"]
     /// Shown over a full-screen app too (WaniKani lessons run in a full-screen browser).
-    static let fullScreenSafe: Set<String> = ["hud", "wk-lessons"]
+    static let fullScreenSafe: Set<String> = ["hud", "wk-lessons", "wk-reviews"]
     var lockChanged: ((Bool) -> Void)?
 
     private var queue: [NotchAlert] = []

@@ -143,6 +143,7 @@ final class WKReview: ObservableObject {
     private func syncTile() {
         WaniKani.shared.setReviewTile(WKReviewTile(characters: card?.subject.characters, type: card?.subject.type ?? "",
                                                    progress: total == 0 ? 0 : Double(finished) / Double(total)))
+        WaniKani.shared.showReviews(done: finished, of: total)
     }
 
     func start() {

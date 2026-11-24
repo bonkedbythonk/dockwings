@@ -10,7 +10,8 @@
 // leeches and buttons to start studying. Reviews run inside the drawer
 // (WaniKaniReview.swift); lessons open the site, and while you do them the
 // notch shows a WaniKani tile and today's lessons (also over a full-screen
-// browser; until none are left, or 20 minutes without a new one).
+// browser; until none are left, or 20 minutes without a new one). Reviews in
+// the drawer show the tile with their progress the same way.
 import AppKit
 import Security
 import SwiftUI
@@ -74,7 +75,25 @@ final class WaniKani: ObservableObject {
     @Published private(set) var celebrating = false
     /// A review session is open in the drawer: the widget stays on the first page.
     @Published private(set) var reviewing = false
-    func setReviewing(_ on: Bool) { if reviewing != on { reviewing = on } }
+    func setReviewing(_ on: Bool) {
+        if reviewing != on { reviewing = on }
+        if !on, reviewsShown != nil { reviewsShown = nil; Notch.shared.clear("wk-reviews") }
+    }
+    private var reviewsShown: String?
+
+    /// The notch during a review in the drawer: the tile left of the camera,
+    /// reviews done right of it; gone once the batch is through.
+    func showReviews(done: Int, of total: Int) {
+        guard reviewing, total > 0, done < total else {
+            if reviewsShown != nil { reviewsShown = nil; Notch.shared.clear("wk-reviews") }
+            return
+        }
+        let count = "\(done)/\(total)"
+        guard count != reviewsShown else { return }
+        reviewsShown = count
+        Notch.shared.post(NotchAlert(id: "wk-reviews", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
+                                     title: "WaniKani reviews", subtitle: "\(total - done) left", duration: 0))
+    }
     @Published private(set) var reviewTile = WKReviewTile(characters: nil, type: "", progress: 0)
     func setReviewTile(_ tile: WKReviewTile) { if reviewTile != tile { reviewTile = tile } }
     /// The next hour with reviews coming.
