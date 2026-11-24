@@ -50,8 +50,18 @@ final class Notch: ObservableObject {
     /// The pointer is over the shape.
     @Published var hovering = false {
         didSet {
+            if !hovering { clicked = false }
             if !hovering, let id = finishWhenLeft { finishWhenLeft = nil; clear(id) }
         }
+    }
+    /// The card was clicked: it folds away and hovering doesn't reopen it
+    /// until the pointer has left (what it opened may sit right below).
+    @Published private var clicked = false
+
+    func run(_ a: NotchAlert) {
+        cardShown = false
+        clicked = true
+        a.action?()
     }
     @Published private(set) var cardShown = false
     /// The notch window can be seen (looping animations stop otherwise).
@@ -77,7 +87,7 @@ final class Notch: ObservableObject {
     /// it by itself. During a file drag the drop card is open from the start,
     /// reaching well below the screen edge (dragging up to the very top opens
     /// Mission Control).
-    var showsCard: Bool { alert != nil && alert?.id != "hud" && (cardShown || hovering || (dragging && alert?.id == "drop")) }
+    var showsCard: Bool { alert != nil && alert?.id != "hud" && (cardShown || (hovering && !clicked) || (dragging && alert?.id == "drop")) }
     /// How wide the black shape is drawn now (same sizes as NotchView), so
     /// buddies can keep clear of it.
     var shapeWidth: CGFloat {
@@ -439,7 +449,7 @@ struct NotchView: View {
     private func cardRow(_ a: NotchAlert) -> some View {
         HStack(spacing: 12) {
             // The text part opens the thing; Allow / Deny sit beside it, not inside.
-            Button { a.action?() } label: {
+            Button { notch.run(a) } label: {
                 HStack(spacing: 12) {
                     NotchIcon(icon: a.icon, small: false).frame(width: 30, height: 30)
                     VStack(alignment: .leading, spacing: 2) {
