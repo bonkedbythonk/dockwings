@@ -94,16 +94,19 @@ struct DrawerHost: View {
     }
 }
 
-/// Like the Dynamic Island: the drawer starts as a black pill the notch's
-/// size right under it and grows into the card (a growing mask, so nothing
-/// stretches), its content coming out of the black. Closing goes back in.
+/// Like the Dynamic Island: the drawer starts as a pill the notch's size
+/// right under it and grows into the card (a growing mask, so nothing
+/// stretches), its content fading in. Closing goes back in.
 private struct Island: ViewModifier {
     let shown: Bool
     func body(content: Content) -> some View {
         let n = Notch.shared.size
         content
             .blur(radius: shown ? 0 : 6)
-            .overlay(Color.black.opacity(shown ? 0 : 1))
+            .opacity(shown ? 1 : 0)
+            // The pill is the card's own colour (no black box), there only
+            // while the content isn't.
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(white: 0.09).opacity(shown ? 0 : 0.88)))
             .mask(alignment: .top) {
                 RoundedRectangle(cornerRadius: shown ? 18 : n.height / 2, style: .continuous)
                     .frame(width: shown ? nil : n.width, height: shown ? nil : n.height)
