@@ -94,7 +94,7 @@ final class Notch: ObservableObject {
     @Published var fullScreen = false {
         didSet {
             guard fullScreen != oldValue, fullScreen else { return }
-            for id in [alert?.id].compactMap({ $0 }) + queue.map(\.id) where id != "hud" { forceClear(id) }
+            for id in [alert?.id].compactMap({ $0 }) + queue.map(\.id) where !Self.fullScreenSafe.contains(id) { forceClear(id) }
         }
     }
 
@@ -111,6 +111,8 @@ final class Notch: ObservableObject {
         }
     }
     static let lockSafe: Set<String> = ["hud", "power"]
+    /// Shown over a full-screen app too (WaniKani lessons run in a full-screen browser).
+    static let fullScreenSafe: Set<String> = ["hud", "wk-lessons"]
     var lockChanged: ((Bool) -> Void)?
 
     private var queue: [NotchAlert] = []
@@ -122,7 +124,7 @@ final class Notch: ObservableObject {
     /// back compact afterwards.
     func post(_ a: NotchAlert) {
         if locked && !Self.lockSafe.contains(a.id) { return }
-        if a.id != "hud" && (fullScreen || !Self.alertsOn) { return }
+        if a.id != "hud" && ((fullScreen && !Self.fullScreenSafe.contains(a.id)) || !Self.alertsOn) { return }
         var a = a
         a.posted = Date()
         queue.removeAll { $0.id == a.id }

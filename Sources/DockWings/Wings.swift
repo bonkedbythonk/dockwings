@@ -89,9 +89,12 @@ final class WingPlan: ObservableObject {
 
     /// The pages of one side: the main page (from `assign`), then the home
     /// widgets that didn't fit anywhere, packed into as many pages as needed.
-    func pages(_ items: [WingItem], for side: Side) -> [[WingItem]] {
+    /// `pinned` (the WaniKani tile mid-review) is shown on every page, so
+    /// later pages keep room for it.
+    func pages(_ items: [WingItem], for side: Side, pinned: String? = nil) -> [[WingItem]] {
         let first = assign(items, to: side)
-        let room = room(side)
+        var room = room(side)
+        if let pinned, placedSide[pinned] == side { room -= (widths[pinned] ?? 140) + Self.minSpacing }
         var pages: [[WingItem]] = [first]
         // First fit: each leftover joins the earliest later page with room,
         // so a small widget fills a gap instead of waiting for a new page.
@@ -272,7 +275,7 @@ struct WingSide: View {
         let _ = prefsVersion
         let shown = items
         let hidden = !presence.shown || (side == .right && presence.screenshotThumbnail)
-        let pages = plan.pages(shown, for: side)
+        let pages = plan.pages(shown, for: side, pinned: wanikani.reviewing ? "wanikani" : nil)
         let pageIndex = min(plan.page[side] ?? 0, pages.count - 1)
         let visible = hidden ? [] : withReviewTile(pages[pageIndex], pages)
         let spare = plan.spare(visible, on: side)

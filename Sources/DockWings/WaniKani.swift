@@ -9,8 +9,8 @@
 // with level progress (90% of the level's kanji passed), the review forecast, your worst
 // leeches and buttons to start studying. Reviews run inside the drawer
 // (WaniKaniReview.swift); lessons open the site, and while you do them the
-// notch shows a WaniKani tile and today's lessons (until done, or 20 minutes
-// without a new one).
+// notch shows a WaniKani tile and today's lessons (also over a full-screen
+// browser; until none are left, or 20 minutes without a new one).
 import AppKit
 import Security
 import SwiftUI
@@ -244,7 +244,7 @@ final class WaniKani: ObservableObject {
     /// The notch while doing lessons: the tile left of the camera, today's
     /// count right of it.
     private func showLessons() {
-        guard let since = lessonsActive, lessonsLeft > 0, Date().timeIntervalSince(since) < 20 * 60 else {
+        guard let since = lessonsActive, lessons > 0, Date().timeIntervalSince(since) < 20 * 60 else {
             if lessonsActive != nil || lessonsShown != nil { Notch.shared.clear("wk-lessons") }
             lessonsActive = nil
             lessonsShown = nil
@@ -254,7 +254,7 @@ final class WaniKani: ObservableObject {
         guard count != lessonsShown else { return }
         lessonsShown = count
         Notch.shared.post(NotchAlert(id: "wk-lessons", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
-                                     title: "WaniKani lessons", subtitle: "\(lessonsLeft) left today", duration: 0,
+                                     title: "WaniKani lessons", subtitle: lessonsLeft > 0 ? "\(lessonsLeft) left today" : "\(lessons) available", duration: 0,
                                      action: { [weak self] in self?.startLessons() }))
     }
 
