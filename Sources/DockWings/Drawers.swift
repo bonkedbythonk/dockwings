@@ -4,7 +4,8 @@
 // drawer window spans the screen width above the Dock; AppDelegate sets
 // `anchorX` to the clicked widget's centre so the drawer sits right above it.
 // Escape or a click in another app closes it. The WaniKani drawer (summary
-// and reviews) sits centred at the top of the screen instead, easier on the eyes.
+// and reviews) sits centred at the top of the screen instead, easier on the eyes,
+// and grows out of the notch like the Dynamic Island.
 import SwiftUI
 
 @MainActor
@@ -64,13 +65,16 @@ struct DrawerHost: View {
                             return -min(max(x, 12), g.size.width - d.width - 12)
                         }
                         .id(id)
-                        .transition(top ? .emerge : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                        .transition(top ? .island : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
         .animation(.spring(duration: 0.4, bounce: 0.12), value: drawers.open)
+        .onChange(of: drawers.open) { _, id in
+            withAnimation(.spring(duration: 0.36, bounce: 0.1)) { Notch.shared.yielded = id == "wanikani" }
+        }
     }
 
     @ViewBuilder
@@ -90,19 +94,28 @@ struct DrawerHost: View {
     }
 }
 
-/// The WaniKani drawer comes out of the notch above it like the system's own
-/// popovers: a little scale from the top, out of a blur, no overshoot.
-private struct Emerge: ViewModifier {
+/// Like the Dynamic Island: the drawer starts as a black pill the notch's
+/// size right under it and grows into the card (a growing mask, so nothing
+/// stretches), its content coming out of the black. Closing goes back in.
+private struct Island: ViewModifier {
     let shown: Bool
     func body(content: Content) -> some View {
-        content.scaleEffect(shown ? 1 : 0.9, anchor: .top).blur(radius: shown ? 0 : 8).opacity(shown ? 1 : 0)
+        let n = Notch.shared.size
+        content
+            .blur(radius: shown ? 0 : 6)
+            .overlay(Color.black.opacity(shown ? 0 : 1))
+            .mask(alignment: .top) {
+                RoundedRectangle(cornerRadius: shown ? 18 : n.height / 2, style: .continuous)
+                    .frame(width: shown ? nil : n.width, height: shown ? nil : n.height)
+            }
+            .offset(y: shown ? 0 : -8)
     }
 }
 
 private extension AnyTransition {
-    static var emerge: AnyTransition {
-        .asymmetric(insertion: .modifier(active: Emerge(shown: false), identity: Emerge(shown: true)).animation(.smooth(duration: 0.35)),
-                    removal: .modifier(active: Emerge(shown: false), identity: Emerge(shown: true)).animation(.smooth(duration: 0.2)))
+    static var island: AnyTransition {
+        .asymmetric(insertion: .modifier(active: Island(shown: false), identity: Island(shown: true)).animation(.spring(duration: 0.5, bounce: 0.18)),
+                    removal: .modifier(active: Island(shown: false), identity: Island(shown: true)).animation(.spring(duration: 0.4, bounce: 0)))
     }
 }
 

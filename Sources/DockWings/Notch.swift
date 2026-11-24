@@ -64,6 +64,9 @@ final class Notch: ObservableObject {
         a.action?()
     }
     @Published private(set) var cardShown = false
+    /// The WaniKani drawer is open: it grew out of the notch, so the notch's
+    /// WaniKani tile steps back meanwhile. Set by the drawer.
+    @Published var yielded = false
     /// The notch window can be seen (looping animations stop otherwise).
     @Published var visible = true
     /// Size of the hardware notch.
@@ -367,7 +370,7 @@ struct NotchView: View {
     private enum Phase: Hashable { case idle, compact(String), card(String) }
 
     private var phase: Phase {
-        guard let a = notch.alert else { return .idle }
+        guard let a = notch.alert, !(notch.yielded && a.id.hasPrefix("wk-")) else { return .idle }
         return notch.showsCard ? .card(a.id) : .compact(a.id)
     }
 
