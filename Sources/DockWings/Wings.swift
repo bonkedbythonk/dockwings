@@ -239,7 +239,7 @@ struct WingSide: View {
             // it holds files it stays in view.
             WingItem("shelf", .left, show: shelf.visible, priority: shelf.dragging ? 9 : 7,
                      bump: shelf.items.count) { ShelfView(shelf: shelf) },
-            WingItem("wanikani", .left, show: wanikani.connected,
+            WingItem("wanikani", .left, show: wanikani.connected && !wanikani.inNotch,
                      priority: wanikani.reviewing ? 8 : wanikani.celebrating ? 7 : !wanikani.hasWork ? 1 : wanikani.nudging ? 5 : 4,
                      bump: "\(wanikani.doneToday)\(wanikani.lessonsToday)\(wanikani.nudging)\(wanikani.celebrating)\(wanikani.reviewing)") { WaniKaniView(wk: wanikani) },
             WingItem("health", .left, show: health.issue != nil, priority: health.issue?.critical == true ? 8 : 5,

@@ -11,7 +11,8 @@
 // (WaniKaniReview.swift); lessons open the site, and while you do them the
 // notch shows a WaniKani tile and today's lessons (also over a full-screen
 // browser; until none are left, or 20 minutes without a new one). Reviews in
-// the drawer show the tile with their progress the same way.
+// the drawer show the tile with their progress the same way. Meanwhile the
+// wing leaves the widget out; the notch's card opens the drawer.
 import AppKit
 import Security
 import SwiftUI
@@ -79,7 +80,13 @@ final class WaniKani: ObservableObject {
         if reviewing != on { reviewing = on }
         if !on, reviewsShown != nil { reviewsShown = nil; Notch.shared.clear("wk-reviews") }
     }
-    private var reviewsShown: String?
+    private var reviewsShown: String? { didSet { syncInNotch() } }
+    /// The notch shows the tile (reviews or lessons): the wing leaves it out.
+    @Published private(set) var inNotch = false
+    private func syncInNotch() {
+        let on = (reviewsShown != nil || lessonsShown != nil) && Notch.alertsOn && Notch.locate() != nil
+        if inNotch != on { inNotch = on }
+    }
 
     /// The notch during a review in the drawer: the tile left of the camera,
     /// reviews done right of it; gone once the batch is through.
@@ -92,7 +99,8 @@ final class WaniKani: ObservableObject {
         guard count != reviewsShown else { return }
         reviewsShown = count
         Notch.shared.post(NotchAlert(id: "wk-reviews", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
-                                     title: "WaniKani reviews", subtitle: "\(total - done) left", duration: 0))
+                                     title: "WaniKani reviews", subtitle: "\(total - done) left", duration: 0,
+                                     action: { Drawers.shared.toggle("wanikani") }))
     }
     @Published private(set) var reviewTile = WKReviewTile(characters: nil, type: "", progress: 0)
     func setReviewTile(_ tile: WKReviewTile) { if reviewTile != tile { reviewTile = tile } }
@@ -252,7 +260,7 @@ final class WaniKani: ObservableObject {
 
     /// Last lesson progress while doing lessons on the site; nil otherwise.
     private var lessonsActive: Date?
-    private var lessonsShown: String?
+    private var lessonsShown: String? { didSet { syncInNotch() } }
 
     func startLessons() {
         open("subject-lessons/start")
@@ -274,7 +282,7 @@ final class WaniKani: ObservableObject {
         lessonsShown = count
         Notch.shared.post(NotchAlert(id: "wk-lessons", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
                                      title: "WaniKani lessons", subtitle: lessonsLeft > 0 ? "\(lessonsLeft) left today" : "\(lessons) available", duration: 0,
-                                     action: { [weak self] in self?.startLessons() }))
+                                     action: { Drawers.shared.toggle("wanikani") }))
     }
 
     /// The widget's pink tile with 鰐, for the notch.
