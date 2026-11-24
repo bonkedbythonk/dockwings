@@ -827,7 +827,7 @@ struct ImageIcon: View {
             .opacity(shown ? 1 : 0)
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    withAnimation(.spring(duration: 0.45, bounce: 0.45)) { shown = true }
+                    withAnimation(.spring(duration: 0.35, bounce: 0.15)) { shown = true }
                 }
             }
     }

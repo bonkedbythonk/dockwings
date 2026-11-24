@@ -72,7 +72,7 @@ struct DrawerHost: View {
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
-        .animation(drawers.open == "wanikani" ? .spring(duration: 0.45, bounce: 0.22) : .spring(duration: 0.4, bounce: 0.12), value: drawers.open)
+        .animation(drawers.open == "wanikani" ? .spring(duration: 0.4, bounce: 0.08) : .spring(duration: 0.4, bounce: 0.12), value: drawers.open)
     }
 
     @ViewBuilder
