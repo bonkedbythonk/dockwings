@@ -8,7 +8,9 @@
 // wave of reviews. A level-up flashes the tile gold for a minute. Clicking opens a drawer
 // with level progress (90% of the level's kanji passed), the review forecast, your worst
 // leeches and buttons to start studying. Reviews run inside the drawer
-// (WaniKaniReview.swift); lessons open the site.
+// (WaniKaniReview.swift); lessons open the site, and while you do them the
+// notch shows a WaniKani tile and today's lessons (until done, or 20 minutes
+// without a new one).
 import AppKit
 import Security
 import SwiftUI
@@ -213,7 +215,9 @@ final class WaniKani: ObservableObject {
                 path = next.map { $0.replacingOccurrences(of: "https://api.wanikani.com/v2/", with: "") }
             }
             doneToday = done
+            if learned > lessonsToday { lessonsActive = lessonsActive.map { _ in now } }
             lessonsToday = learned
+            showLessons()
             if unlocked { nudge() }
         }
     }
@@ -226,6 +230,45 @@ final class WaniKani: ObservableObject {
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
+
+    /// Last lesson progress while doing lessons on the site; nil otherwise.
+    private var lessonsActive: Date?
+    private var lessonsShown: String?
+
+    func startLessons() {
+        open("subject-lessons/start")
+        lessonsActive = Date()
+        showLessons()
+    }
+
+    /// The notch while doing lessons: the tile left of the camera, today's
+    /// count right of it.
+    private func showLessons() {
+        guard let since = lessonsActive, lessonsLeft > 0, Date().timeIntervalSince(since) < 20 * 60 else {
+            if lessonsActive != nil || lessonsShown != nil { Notch.shared.clear("wk-lessons") }
+            lessonsActive = nil
+            lessonsShown = nil
+            return
+        }
+        let count = "\(lessonsToday)/\(goal)"
+        guard count != lessonsShown else { return }
+        lessonsShown = count
+        Notch.shared.post(NotchAlert(id: "wk-lessons", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
+                                     title: "WaniKani lessons", subtitle: "\(lessonsLeft) left today", duration: 0,
+                                     action: { [weak self] in self?.startLessons() }))
+    }
+
+    /// The widget's pink tile with 鰐, for the notch.
+    private static let tile: NSImage = {
+        let view = ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(WK.pink)
+            Text("鰐").font(.system(size: 26, weight: .bold)).foregroundStyle(.white)
+        }
+        .frame(width: 40, height: 40)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        return renderer.nsImage ?? NSImage()
+    }()
 
     func open(_ path: String) {
         Drawers.shared.open = nil
@@ -405,7 +448,7 @@ struct WaniKaniView: View {
         .tapAction { Drawers.shared.toggle("wanikani") }
         .contextMenu {
             Button("Start Reviews") { wk.open("subjects/review") }
-            Button("Start Lessons") { wk.open("subject-lessons/start") }
+            Button("Start Lessons") { wk.startLessons() }
             Button("Refresh") { wk.refresh() }
         }
         .animation(.spring(duration: 0.4, bounce: 0.2), value: wk.reviews)
@@ -594,7 +637,7 @@ struct WaniKaniDrawer: View {
                 }
             }
             HStack(spacing: 10) {
-                Button { wk.open("subject-lessons/start") } label: {
+                Button { wk.startLessons() } label: {
                     Text("Lessons").frame(maxWidth: .infinity).padding(.vertical, 7)
                         .background(RoundedRectangle(cornerRadius: 8).fill(WK.blue.opacity(wk.lessonsLeft > 0 ? 0.9 : 0.25)))
                 }
