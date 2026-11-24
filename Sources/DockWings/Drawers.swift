@@ -3,8 +3,8 @@
 // the buddy's characters). One at a time. The
 // drawer window spans the screen width above the Dock; AppDelegate sets
 // `anchorX` to the clicked widget's centre so the drawer sits right above it.
-// Escape or a click in another app closes it. A WaniKani review sits centred
-// above the Dock instead.
+// Escape or a click in another app closes it. The WaniKani drawer (summary
+// and reviews) sits centred at the top of the screen instead, easier on the eyes.
 import SwiftUI
 
 @MainActor
@@ -19,12 +19,9 @@ final class Drawers: ObservableObject {
     /// window can let clicks through everywhere else.
     var frame = CGRect.zero
 
-    /// The Dock's centre, in drawer coordinates. A WaniKani review sits
-    /// centred above the Dock instead of above the widget.
+    /// The Dock's centre, in drawer coordinates. The WaniKani drawer sits
+    /// centred on it, at the top of the screen.
     var dockCenter: CGFloat = 0
-    /// The WaniKani drawer sits over the Dock's centre (during a review, and
-    /// until the widget has settled afterwards).
-    @Published var centred = false
 
     /// Set by AppDelegate: the centre of a widget, in drawer coordinates.
     var locate: ((String) -> CGFloat?)?
@@ -54,35 +51,26 @@ struct DrawerHost: View {
                 // Full-width base, so the drawer's alignment guide has room.
                 Color.clear.frame(width: g.size.width, height: g.size.height)
                 if let id = drawers.open {
+                    let top = id == "wanikani"
                     content(id)
                         .fixedSize()
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { drawers.frame = $0 }
+                        .padding(.top, top ? 8 : 0)
+                        .frame(maxHeight: .infinity, alignment: top ? .top : .bottom)
                         // Centre over the widget using the drawer's real width,
                         // kept 12pt inside the screen.
                         .alignmentGuide(.leading) { d in
-                            let x = (id == "wanikani" && drawers.centred) || drawers.anchorX <= 0 ? drawers.dockCenter - d.width / 2 : drawers.anchorX - d.width / 2
+                            let x = top || drawers.anchorX <= 0 ? drawers.dockCenter - d.width / 2 : drawers.anchorX - d.width / 2
                             return -min(max(x, 12), g.size.width - d.width - 12)
                         }
                         .id(id)
-                        .transition(.offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                        .transition(.offset(y: top ? -24 : 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: top ? .top : .bottom)))
                 }
             }
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
         .animation(.spring(duration: 0.4, bounce: 0.12), value: drawers.open)
-        // After a review the widget is back to full size somewhere else:
-        // move the summary drawer above it once the wing has settled.
-        .onChange(of: wanikani.reviewing, initial: true) { _, on in
-            guard !on else {
-                if !drawers.centred { withAnimation(.spring(duration: 0.4, bounce: 0.12)) { drawers.centred = true } }
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                if drawers.open == "wanikani", let x = drawers.locate?("wanikani") { drawers.anchorX = x }
-                withAnimation(.spring(duration: 0.4, bounce: 0.12)) { drawers.centred = false }
-            }
-        }
     }
 
     @ViewBuilder

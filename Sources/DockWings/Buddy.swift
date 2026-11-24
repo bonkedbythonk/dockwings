@@ -660,7 +660,8 @@ final class Buddy {
     static let drawerID = -1
     private func drawerPlatform() -> Platform? {
         let d = Drawers.shared
-        guard d.open != nil, d.frame.width >= 120, let win = drawerWindow, win.isVisible else { return nil }
+        // The WaniKani drawer is at the top of the screen, out of reach.
+        guard d.open != nil, d.open != "wanikani", d.frame.width >= 120, let win = drawerWindow, win.isVisible else { return nil }
         let f = panel.frame
         return Platform(id: Self.drawerID, minX: win.frame.minX + d.frame.minX - f.minX, maxX: win.frame.minX + d.frame.maxX - f.minX,
                         y: win.frame.maxY - d.frame.minY - f.minY)

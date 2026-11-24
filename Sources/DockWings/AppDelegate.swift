@@ -364,7 +364,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Ink.shared.update(regions: inkRegions, screen: dock.screen)
-        drawerPanel.setRegion(NSRect(x: screen.minX, y: d.maxY + gap, width: screen.width, height: 620))
+        // Up to the menu bar: the WaniKani drawer sits at the top of the screen.
+        drawerPanel.setRegion(NSRect(x: screen.minX, y: d.maxY + gap, width: screen.width,
+                                     height: dock.screen.visibleFrame.maxY - d.maxY - gap))
         buddy.order(below: drawerPanel)
         Drawers.shared.dockCenter = d.midX - screen.minX
     }
