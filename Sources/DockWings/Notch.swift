@@ -823,11 +823,11 @@ struct ImageIcon: View {
         Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             .frame(width: small ? 20 : 30, height: small ? 20 : 30)
             .clipShape(RoundedRectangle(cornerRadius: small ? 5 : 7, style: .continuous))
-            .scaleEffect(shown ? 1 : 0.4)
+            .scaleEffect(shown ? 1 : 0.6)
             .opacity(shown ? 1 : 0)
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    withAnimation(.spring(duration: 0.35, bounce: 0.15)) { shown = true }
+                    withAnimation(.snappy(duration: 0.3)) { shown = true }
                 }
             }
     }

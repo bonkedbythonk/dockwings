@@ -64,15 +64,13 @@ struct DrawerHost: View {
                             return -min(max(x, 12), g.size.width - d.width - 12)
                         }
                         .id(id)
-                        // The WaniKani drawer grows out of the notch above it.
-                        .transition(top ? .scale(scale: 0.25, anchor: .top).combined(with: .opacity).combined(with: .offset(y: -12))
-                                        : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                        .transition(top ? .emerge : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
-        .animation(drawers.open == "wanikani" ? .spring(duration: 0.4, bounce: 0.08) : .spring(duration: 0.4, bounce: 0.12), value: drawers.open)
+        .animation(.spring(duration: 0.4, bounce: 0.12), value: drawers.open)
     }
 
     @ViewBuilder
@@ -89,6 +87,22 @@ struct DrawerHost: View {
         case "buddy": BuddyDrawer()
         default: EmptyView()
         }
+    }
+}
+
+/// The WaniKani drawer comes out of the notch above it like the system's own
+/// popovers: a little scale from the top, out of a blur, no overshoot.
+private struct Emerge: ViewModifier {
+    let shown: Bool
+    func body(content: Content) -> some View {
+        content.scaleEffect(shown ? 1 : 0.9, anchor: .top).blur(radius: shown ? 0 : 8).opacity(shown ? 1 : 0)
+    }
+}
+
+private extension AnyTransition {
+    static var emerge: AnyTransition {
+        .asymmetric(insertion: .modifier(active: Emerge(shown: false), identity: Emerge(shown: true)).animation(.smooth(duration: 0.35)),
+                    removal: .modifier(active: Emerge(shown: false), identity: Emerge(shown: true)).animation(.smooth(duration: 0.2)))
     }
 }
 
