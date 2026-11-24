@@ -434,8 +434,9 @@ struct NotchView: View {
         .frame(height: notch.size.height)
     }
 
+    @ViewBuilder
     private func card(_ a: NotchAlert) -> some View {
-        VStack(alignment: .trailing, spacing: 10) {
+        let content = VStack(alignment: .trailing, spacing: 10) {
             cardRow(a)
             if let approve = a.approve {
                 ApprovalButtons(allow: { approve(true) }, deny: { approve(false) })
@@ -444,24 +445,29 @@ struct NotchView: View {
         .padding(.horizontal, 22)
         .padding(.top, notch.size.height + 4)
         .padding(.bottom, 14)
+        // Without Allow / Deny the whole card opens the thing.
+        if a.approve == nil {
+            Button { notch.run(a) } label: { content.contentShape(Rectangle()) }.buttonStyle(.plain)
+        } else {
+            content
+        }
     }
 
+    @ViewBuilder
     private func cardRow(_ a: NotchAlert) -> some View {
-        HStack(spacing: 12) {
-            // The text part opens the thing; Allow / Deny sit beside it, not inside.
-            Button { notch.run(a) } label: {
-                HStack(spacing: 12) {
-                    NotchIcon(icon: a.icon, small: false).frame(width: 30, height: 30)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(a.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                        Text(a.subtitle).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                }
-                .contentShape(Rectangle())
+        let row = HStack(spacing: 12) {
+            NotchIcon(icon: a.icon, small: false).frame(width: 30, height: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(a.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(a.subtitle).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
             }
-            .buttonStyle(.plain)
-            if a.approve == nil { NotchTrailing(trailing: a.trailing) }
+            Spacer(minLength: 8)
+        }
+        if a.approve == nil {
+            HStack(spacing: 12) { row; NotchTrailing(trailing: a.trailing) }
+        } else {
+            // The text part opens the thing; Allow / Deny sit beside it, not inside.
+            Button { notch.run(a) } label: { row.contentShape(Rectangle()) }.buttonStyle(.plain)
         }
     }
 }
