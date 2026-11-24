@@ -64,13 +64,15 @@ struct DrawerHost: View {
                             return -min(max(x, 12), g.size.width - d.width - 12)
                         }
                         .id(id)
-                        .transition(.offset(y: top ? -24 : 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: top ? .top : .bottom)))
+                        // The WaniKani drawer grows out of the notch above it.
+                        .transition(top ? .scale(scale: 0.25, anchor: .top).combined(with: .opacity).combined(with: .offset(y: -12))
+                                        : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
-        .animation(.spring(duration: 0.4, bounce: 0.12), value: drawers.open)
+        .animation(drawers.open == "wanikani" ? .spring(duration: 0.45, bounce: 0.22) : .spring(duration: 0.4, bounce: 0.12), value: drawers.open)
     }
 
     @ViewBuilder

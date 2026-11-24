@@ -491,9 +491,7 @@ struct NotchIcon: View {
                 AirPodsSpin(name: name, size: small ? 14 : 20)
             }
         case let .image(image):
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                .frame(width: small ? 20 : 30, height: small ? 20 : 30)
-                .clipShape(RoundedRectangle(cornerRadius: small ? 5 : 7, style: .continuous))
+            ImageIcon(image: image, small: small)
         }
     }
 }
@@ -503,7 +501,10 @@ struct NotchTrailing: View {
 
     var body: some View {
         switch trailing {
-        case let .text(s, color): Text(s).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(color)
+        case let .text(s, color):
+            // Counts (WaniKani's done/total) roll to the next number.
+            Text(s).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(color)
+                .contentTransition(.numericText()).animation(.smooth(duration: 0.3), value: s)
         case let .symbol(name, color): Image(systemName: name).font(.system(size: 12, weight: .semibold)).foregroundStyle(color)
         case let .bars(live): EqualizerBars(playing: true, live: live)
         case let .level(value):
@@ -811,6 +812,27 @@ struct DoneCheck: View {
 /// bounces once as it appears, keeps dropping (downloads, the file tray),
 /// pulses, wiggles (heat), or animates between symbols as they change (the
 /// HUD's speaker waves and sun).
+/// A picture icon (the WaniKani tile, a kept file) pops in as it appears,
+/// like the symbols' bounce.
+struct ImageIcon: View {
+    let image: NSImage
+    let small: Bool
+    @State private var shown = false
+
+    var body: some View {
+        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            .frame(width: small ? 20 : 30, height: small ? 20 : 30)
+            .clipShape(RoundedRectangle(cornerRadius: small ? 5 : 7, style: .continuous))
+            .scaleEffect(shown ? 1 : 0.4)
+            .opacity(shown ? 1 : 0)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    withAnimation(.spring(duration: 0.45, bounce: 0.45)) { shown = true }
+                }
+            }
+    }
+}
+
 struct SymbolIcon: View {
     let name: String
     let color: Color
