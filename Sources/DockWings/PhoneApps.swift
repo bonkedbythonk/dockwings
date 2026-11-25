@@ -1,10 +1,10 @@
 // Phone apps widget: counts down to when the sideloaded iPhone and Apple TV
-// apps stop opening. tools/ios-refresh re-signs them (free signing lasts 7 days)
+// apps stop opening. tools/app-refresh re-signs them (free signing lasts 7 days)
 // and writes the Unix time of each app's last refresh to
-// ~/Library/Application Support/ios-refresh/<app>; it refreshes after 4 days,
+// ~/Library/Application Support/app-refresh/<app>; it refreshes after 4 days,
 // so the widget only shows once an app is 6 hours past that (66 hours left),
 // which means the refresh didn't happen. The reason comes from the latest line about those apps
-// in ~/Library/Logs/ios-refresh.log. Red under a day. Clicking runs the refresh
+// in ~/Library/Logs/app-refresh.log. Red under a day. Clicking runs the refresh
 // job now. Checked every minute (a few small file reads).
 import AppKit
 import SwiftUI
@@ -24,10 +24,10 @@ final class PhoneApps: ObservableObject {
 
     @Published private(set) var status: Status?
 
-    private static let state = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/ios-refresh")
-    private static let log = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/ios-refresh.log")
-    static let job = "local.ios-refresh"
-    /// State file names of the Apple TV apps (device_of in tools/ios-refresh/refresh.sh).
+    private static let state = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/app-refresh")
+    private static let log = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/app-refresh.log")
+    static let job = "local.app-refresh"
+    /// State file names of the Apple TV apps (device_of in tools/app-refresh/refresh.sh).
     private static let tvApps: Set<String> = ["anicat-tv", "tide", "glint"]
 
     init() {
@@ -112,7 +112,7 @@ struct PhoneAppsView: View {
             .tapAction { phone.refreshNow() }
             .contextMenu {
                 Button("Refresh Now") { phone.refreshNow() }
-                Button("Show Log") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/ios-refresh.log")) }
+                Button("Show Log") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/app-refresh.log")) }
             }
             .help(status.apps.joined(separator: ", ") + ": click to refresh now")
             .transition(.blurReplace)
