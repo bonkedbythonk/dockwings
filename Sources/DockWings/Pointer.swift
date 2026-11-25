@@ -43,7 +43,8 @@ final class Pointer {
             let large = prefs?.double(forKey: "largesize") ?? 0
             if tile > 0, large > tile { ratio = min(large / tile, 1.5) }
         }
-        headroom = ceil(box.height * (ratio - 1)) + 4
+        // Dock bar: room for a widget's attention hop too.
+        headroom = ceil(box.height * (ratio - 1)) + (Config.bar ? 12 : 4)
         for wing in [left, right] {
             wing.ratio = ratio
             if wing.boxHeight != box.height { wing.boxHeight = box.height }

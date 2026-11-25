@@ -549,6 +549,8 @@ struct MusicView: View {
 /// play, drag to reorder), and like, shuffle, radio, add to playlist, volume.
 struct MusicDrawer: View {
     @ObservedObject var music: Music
+    /// Inside the notch (Dock bar): no card of its own, the notch's width.
+    var bare = false
     @State private var query = ""
     @State private var tab = 0
     /// Tide's accent: the cover's colour, only on things switched on.
@@ -618,9 +620,9 @@ struct MusicDrawer: View {
             .foregroundStyle(.secondary)
             .animation(.smooth(duration: 0.8), value: music.trackKey)
         }
-        .padding(16)
-        .frame(width: 360)
-        .card(radius: 18)
+        .padding(bare ? 0 : 16)
+        .frame(width: bare ? nil : 360)
+        .modifier(CardUnless(bare: bare))
         .animation(.spring(duration: 0.4, bounce: 0.12), value: tab)
         .animation(.smooth(duration: 0.3), value: music.results.count)
     }
@@ -909,7 +911,8 @@ private struct BarsLayer: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError() }
 
         func show(_ levels: [Double]) {
-            guard playing else { return }
+            // Tide sometimes sends only NaN: no real levels, keep the loop.
+            guard playing, levels.contains(where: \.isFinite) else { return }
             lastLive = Date()
             stopLoop()
             CATransaction.begin()
@@ -1112,5 +1115,13 @@ private struct SongArt: View {
         }
         .frame(width: 32, height: 32)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+/// A drawer's own card, except inside the notch.
+struct CardUnless: ViewModifier {
+    let bare: Bool
+    func body(content: Content) -> some View {
+        if bare { content } else { content.card(radius: 18) }
     }
 }

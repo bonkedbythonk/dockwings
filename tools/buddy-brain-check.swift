@@ -36,6 +36,12 @@ for run in 0..<3000 {
     }
     if dice.chance(0.7) { world.notchX = width / 2 + 160; world.notch = (width / 2 - 95)...(width / 2 + 95); world.notchDepth = 32 }
     if dice.chance(0.8) { let c = width / 2; let half = min(CGFloat(dice.range(100...400)), width * 0.3); world.dock = (c - half)...(c + half) }
+    // Dock bar: widgets inside the Dock, sometimes right against the screen
+    // edge, on screens wide enough to leave free glass beside them.
+    if dice.chance(0.5), width >= 1400 {
+        let edge = CGFloat(dice.range(0...60)), w1 = CGFloat(dice.range(120...300)), w2 = CGFloat(dice.range(120...300))
+        world.widgets = [edge...(edge + w1), (width - edge - w2)...(width - edge)]
+    }
     let moves = [full, tiny, extra][run % 3]
     var state = MascotState(position: CGPoint(x: world.clampX(CGFloat(dice.range(0...Double(width)))), y: world.floor), surface: .floor)
     for _ in 0..<60 {
@@ -46,6 +52,7 @@ for run in 0..<3000 {
         sig.idleSeconds = dice.chance(0.1) ? 200 : dice.range(0...10)
         sig.typing = dice.chance(0.2)
         sig.lowBattery = dice.chance(0.1)
+        sig.batteryX = dice.chance(0.5) ? CGFloat(dice.range(0...Double(width))) : nil
         sig.hot = dice.chance(0.1)
         sig.attentionX = dice.chance(0.1) ? CGFloat(dice.range(0...Double(width))) : nil
         sig.followX = dice.chance(0.1) ? CGFloat(dice.range(-100...Double(width + 100))) : nil
@@ -61,11 +68,18 @@ for run in 0..<3000 {
             case .play(let name, let seconds):
                 seen[name, default: 0] += 1
                 if seconds > 1, state.surface == .floor, world.lane.upperBound - world.lane.lowerBound > size * 30,
-                   sig.others.contains(where: { abs($0 - state.position.x) < size * 0.89 }) {
+                   sig.others.contains(where: { abs($0 - state.position.x) < size * 0.89 }),
+                   // (Unless no free spot is left at all between the icons and widgets.)
+                   Brain.freeSpot(near: state.position.x, others: sig.others, world: world) != state.position.x {
                     fail("\(name) on top of another buddy at \(state.position.x), others \(sig.others)")
                 }
                 if seconds > 1, state.surface == .floor, let dock = world.dock, state.position.x > dock.lowerBound, state.position.x < dock.upperBound {
                     fail("\(name) while standing over the Dock icons at \(state.position.x)")
+                }
+                // (Unless the widgets leave no free spot: then only the icons count.)
+                let widgetsCount = world.widgets.allSatisfy { w in world.noStop.contains { $0.lowerBound <= w.lowerBound && $0.upperBound >= w.upperBound } }
+                if seconds > 1, state.surface == .floor, widgetsCount, world.widgets.contains(where: { state.position.x > $0.lowerBound && state.position.x < $0.upperBound }) {
+                    fail("\(name) while sitting on a widget at \(state.position.x)")
                 }
                 if !(seconds.isFinite && seconds > 0) { fail("play \(name) seconds \(seconds)") }
                 if moves.has(name) == false, name != "Stand", moves.actions[name] != nil, !["Bouncing", "Sit", "SitAndLookUp", "Sprawl", "Jumping", "SitAndSpinHead"].contains(name) {

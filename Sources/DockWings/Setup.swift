@@ -414,13 +414,11 @@ private struct NotchToggles: View {
     @AppStorage("notchAlerts") private var alerts = true
     @AppStorage("notchHUD") private var hud = true
     @AppStorage("claudeApprovals") private var approvals = true
-    @AppStorage("lockCard") private var lockCard = true
 
     var body: some View {
         Toggle(isOn: $alerts) { Label("Alerts in the notch", systemImage: "rectangle.topthird.inset.filled") }
         Toggle(isOn: $hud) { Label("Volume and brightness in the notch", systemImage: "speaker.wave.2") }
         Toggle(isOn: $approvals) { Label("Allow or deny Claude Code from the notch", systemImage: "checkmark.shield") }
-        Toggle(isOn: $lockCard) { Label("Music on the lock screen", systemImage: "lock") }
     }
 }
 

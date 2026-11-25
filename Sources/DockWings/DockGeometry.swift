@@ -17,15 +17,56 @@ enum DockGeometry {
         return (rect, screen)
     }
 
+    /// Bar mode: where the wings sit. Each side is a span of spacer runs,
+    /// split at the widest stretch of apps (the Dock's own app list); apps
+    /// dragged in among a side's spacers are holes the widgets go around.
+    /// Spans and holes are screen rects.
+    static func spacerSides() -> (left: NSRect, right: NSRect, leftHoles: [NSRect], rightHoles: [NSRect])? {
+        guard let runs = spacerRuns(), runs.count >= 2 else { return nil }
+        // The widest gap between neighbouring runs is the main app list.
+        let split = (1..<runs.count).max { runs[$0].minX - runs[$0 - 1].maxX < runs[$1].minX - runs[$1 - 1].maxX }!
+        let left = Array(runs[..<split]), right = Array(runs[split...])
+        func holes(_ side: [NSRect]) -> [NSRect] {
+            zip(side, side.dropFirst()).map { NSRect(x: $0.maxX, y: $0.minY, width: $1.minX - $0.maxX, height: $0.height) }
+        }
+        return (left.reduce(left[0]) { $0.union($1) }, right.reduce(right[0]) { $0.union($1) }, holes(left), holes(right))
+    }
+
+    /// Every item in the Dock's list: its Accessibility subrole and width.
+    static func items() -> [(subrole: String, width: CGFloat)]? {
+        guard let list = dockList(), let items = copy(list, kAXChildrenAttribute) as? [AXUIElement] else { return nil }
+        return items.map { ((copy($0, kAXSubroleAttribute) as? String) ?? "", frame(of: $0)?.width ?? 0) }
+    }
+
+    /// Every run of blank spacer tiles in the Dock, left to right.
+    private static func spacerRuns() -> [NSRect]? {
+        guard let list = dockList(), let items = copy(list, kAXChildrenAttribute) as? [AXUIElement] else { return nil }
+        var runs: [NSRect] = []
+        var inRun = false
+        for item in items {
+            guard (copy(item, kAXSubroleAttribute) as? String) == "AXSpacerDockItem", let f = frame(of: item) else { inRun = false; continue }
+            if inRun { runs[runs.count - 1] = runs[runs.count - 1].union(f) } else { runs.append(f) }
+            inRun = true
+        }
+        return runs
+    }
+
     private static func axFrame() -> NSRect? {
+        dockList().flatMap(frame(of:))
+    }
+
+    private static func dockList() -> AXUIElement? {
         guard AXIsProcessTrusted(),
               let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
         else { return nil }
         let app = AXUIElementCreateApplication(dock.processIdentifier)
-        guard let children = copy(app, kAXChildrenAttribute) as? [AXUIElement],
-              let list = children.first(where: { (copy($0, kAXRoleAttribute) as? String) == kAXListRole }),
-              let posValue = copy(list, kAXPositionAttribute),
-              let sizeValue = copy(list, kAXSizeAttribute)
+        return (copy(app, kAXChildrenAttribute) as? [AXUIElement])?
+            .first { (copy($0, kAXRoleAttribute) as? String) == kAXListRole }
+    }
+
+    private static func frame(of element: AXUIElement) -> NSRect? {
+        guard let posValue = copy(element, kAXPositionAttribute),
+              let sizeValue = copy(element, kAXSizeAttribute)
         else { return nil }
         var pos = CGPoint.zero
         var size = CGSize.zero

@@ -97,10 +97,17 @@ final class WaniKani: ObservableObject {
         }
         let count = "\(done)/\(total)"
         guard count != reviewsShown else { return }
+        let first = reviewsShown == nil
         reviewsShown = count
         Notch.shared.post(NotchAlert(id: "wk-reviews", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
                                      title: "WaniKani reviews", subtitle: "\(total - done) left", duration: 0,
-                                     tapOpens: true, action: { Drawers.shared.toggle("wanikani") }))
+                                     tapOpens: !Config.bar, action: { Drawers.shared.toggle("wanikani") }))
+        // Dock bar: reviews happen at the top of the screen, in the notch
+        // grown into the WaniKani panel (easier on the eyes than the Dock).
+        if Config.bar, first {
+            if Drawers.shared.open == "wanikani" { Drawers.shared.open = nil }
+            withAnimation(.smooth(duration: 0.34)) { Notch.shared.expanded = true }
+        }
     }
     @Published private(set) var reviewTile = WKReviewTile(characters: nil, type: "", progress: 0)
     func setReviewTile(_ tile: WKReviewTile) { if reviewTile != tile { reviewTile = tile } }
@@ -263,6 +270,8 @@ final class WaniKani: ObservableObject {
     private var lessonsShown: String? { didSet { syncInNotch() } }
 
     func startLessons() {
+        // Lessons happen on the website: the notch's panel folds away.
+        if Config.bar { withAnimation(.smooth(duration: 0.34)) { Notch.shared.expanded = false } }
         open("subject-lessons/start")
         lessonsActive = Date()
         showLessons()
@@ -282,7 +291,15 @@ final class WaniKani: ObservableObject {
         lessonsShown = count
         Notch.shared.post(NotchAlert(id: "wk-lessons", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
                                      title: "WaniKani lessons", subtitle: lessonsLeft > 0 ? "\(lessonsLeft) left today" : "\(lessons) available", duration: 0,
-                                     tapOpens: true, action: { Drawers.shared.toggle("wanikani") }))
+                                     tapOpens: !Config.bar, action: { Drawers.shared.toggle("wanikani") }))
+    }
+
+    /// Dock bar: the widget's click opens the WaniKani panel straight in the
+    /// notch (summary, then reviews there), not above the widget first.
+    func openInNotch() {
+        Notch.shared.post(NotchAlert(id: "wk-open", icon: .image(Self.tile), trailing: .text("\(reviews)", .white.opacity(0.7)),
+                                     title: "WaniKani", subtitle: "\(reviews) reviews · \(lessonsLeft) lessons left", duration: 0))
+        withAnimation(.smooth(duration: 0.34)) { Notch.shared.expanded = true }
     }
 
     /// The widget's pink tile with 鰐, for the notch.
@@ -472,7 +489,7 @@ struct WaniKaniView: View {
                 .frame(width: idle == nil ? nil : 150, alignment: .leading)
             }
         }
-        .tapAction { Drawers.shared.toggle("wanikani") }
+        .tapAction { if Config.bar { WaniKani.shared.openInNotch() } else { Drawers.shared.toggle("wanikani") } }
         .contextMenu {
             Button("Start Reviews") { wk.open("subjects/review") }
             Button("Start Lessons") { wk.startLessons() }
@@ -596,14 +613,17 @@ private struct GoldBurst: NSViewRepresentable {
 struct WaniKaniDrawer: View {
     @ObservedObject var wk: WaniKani
     @ObservedObject var review = WKReview.shared
+    /// Inside the notch (Dock bar): no card of its own, the notch's width.
+    var bare = false
 
     var body: some View {
         Group {
-            if review.phase == .idle { summary } else { WaniKaniReviewView(review: review) }
+            if review.phase == .idle { summary.transition(.opacity) } else { WaniKaniReviewView(review: review).transition(.opacity) }
         }
-        .padding(16)
-        .frame(width: review.phase == .idle ? 330 : 400)
-        .card()
+        .animation(.smooth(duration: 0.3), value: review.phase == .idle)
+        .padding(bare ? 0 : 16)
+        .frame(width: bare ? nil : review.phase == .idle ? 330 : 400)
+        .modifier(CardUnless(bare: bare))
         .onAppear {
             wk.refreshDetails()
             if Config.demo != nil, UserDefaults.standard.string(forKey: "Review") != nil, review.phase == .idle { review.start() }

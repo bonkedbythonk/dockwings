@@ -144,6 +144,7 @@ final class Batteries: ObservableObject {
 
 struct BatteriesView: View {
     @ObservedObject var batteries: Batteries
+    @ObservedObject private var health = Health.shared
 
     var body: some View {
         Button { Drawers.shared.toggle("batteries") } label: { row }
@@ -166,6 +167,12 @@ struct BatteriesView: View {
                     .lineLimit(1)
                     .fixedSize()
                     .foregroundStyle(item.percent <= 20 ? AnyShapeStyle(Color(red: 1, green: 0.42, blue: 0.38)) : AnyShapeStyle(ink(0.85)))
+                    // The Mac on battery: time left to 20% under it.
+                    if item.id == "mac", let time = health.batteryTime {
+                        Text(time.replacingOccurrences(of: " to 20%", with: ""))
+                            .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                            .foregroundStyle(ink(0.6)).lineLimit(1).fixedSize()
+                    }
                 }
                 .transition(.rise)
             }
@@ -194,9 +201,32 @@ struct BatteryList: View {
                     Text("\(item.percent)%").font(.system(size: 12, weight: .semibold)).monospacedDigit().frame(width: 36, alignment: .trailing)
                 }
             }
+            mac
         }
         .padding(16)
         .frame(minWidth: 260)
         .card()
+    }
+
+    /// The Mac's own details (what the Mac widget's drawer had).
+    @ViewBuilder private var mac: some View {
+        let health = Health.shared
+        if batteries.items.contains(where: { $0.id == "mac" }) {
+            Divider().opacity(0.4)
+            HStack {
+                Text(health.batteryTime ?? "On power").font(.system(size: 12, weight: .medium))
+                Spacer()
+                if let c = health.celsius { Text("\(Int(c))°C").font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary) }
+            }
+            ForEach(health.top) { proc in
+                HStack {
+                    Text(proc.name).font(.system(size: 12)).lineLimit(1)
+                    Spacer(minLength: 24)
+                    Text("\(proc.percent)%").font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            Button("Open Activity Monitor") { HealthView.openActivityMonitor() }
+                .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+        }
     }
 }

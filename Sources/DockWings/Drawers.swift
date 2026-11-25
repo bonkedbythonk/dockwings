@@ -3,9 +3,8 @@
 // the buddy's characters). One at a time. The
 // drawer window spans the screen width above the Dock; AppDelegate sets
 // `anchorX` to the clicked widget's centre so the drawer sits right above it.
-// Escape or a click in another app closes it. The WaniKani drawer (summary
-// and reviews) sits centred at the top of the screen instead, easier on the eyes,
-// and grows out of the notch like the Dynamic Island.
+// Escape or a click in another app closes it. Every drawer, WaniKani's
+// included, slides up above its widget.
 import SwiftUI
 
 @MainActor
@@ -52,29 +51,25 @@ struct DrawerHost: View {
                 // Full-width base, so the drawer's alignment guide has room.
                 Color.clear.frame(width: g.size.width, height: g.size.height)
                 if let id = drawers.open {
-                    let top = id == "wanikani"
                     content(id)
                         .fixedSize()
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { drawers.frame = $0 }
-                        .padding(.top, top ? 8 : 0)
-                        .frame(maxHeight: .infinity, alignment: top ? .top : .bottom)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
                         // Centre over the widget using the drawer's real width,
                         // kept 12pt inside the screen.
                         .alignmentGuide(.leading) { d in
-                            let x = top || drawers.anchorX <= 0 ? drawers.dockCenter - d.width / 2 : drawers.anchorX - d.width / 2
+                            let centre = drawers.anchorX <= 0 ? drawers.dockCenter : drawers.anchorX
+                            let x = centre - d.width / 2
                             return -min(max(x, 12), g.size.width - d.width - 12)
                         }
                         .id(id)
-                        .transition(top ? .island : .offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                        .transition(.offset(y: 24).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
             }
             .frame(width: g.size.width, height: g.size.height, alignment: .bottomLeading)
         }
         .onExitCommand { drawers.open = nil }
         .animation(.spring(duration: 0.4, bounce: 0.12), value: drawers.open)
-        .onChange(of: drawers.open) { _, id in
-            withAnimation(.spring(duration: 0.36, bounce: 0.1)) { Notch.shared.yielded = id == "wanikani" }
-        }
     }
 
     @ViewBuilder
@@ -91,51 +86,6 @@ struct DrawerHost: View {
         case "buddy": BuddyDrawer()
         default: EmptyView()
         }
-    }
-}
-
-/// Like the Dynamic Island: the drawer starts as a pill the notch's size
-/// right under it and grows into the card (a growing mask, so nothing
-/// stretches), its content fading in. Closing goes back in.
-private struct Island: ViewModifier {
-    let shown: Bool
-    func body(content: Content) -> some View {
-        content
-            .blur(radius: shown ? 0 : 6)
-            .opacity(shown ? 1 : 0)
-            // The pill is the card's own colour (no black box), there only
-            // while the content isn't.
-            .background(Color(white: 0.09).opacity(shown ? 0 : 0.88))
-            .clipShape(IslandShape(progress: shown ? 1 : 0, start: Notch.shared.size))
-            .offset(y: shown ? 0 : -8)
-    }
-}
-
-/// A rounded rect growing from a notch-sized pill at the top centre to the
-/// full frame. Animates through `progress`, so every frame is in between.
-private struct IslandShape: Shape {
-    var progress: CGFloat
-    let start: CGSize
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func path(in r: CGRect) -> Path {
-        let p = max(0, progress)
-        let w = start.width + (r.width - start.width) * p
-        let h = start.height + (r.height - start.height) * p
-        let radius = start.height / 2 + (18 - start.height / 2) * min(p, 1)
-        return Path(roundedRect: CGRect(x: r.midX - w / 2, y: r.minY, width: w, height: max(h, 0)),
-                    cornerRadius: max(radius, 0), style: .continuous)
-    }
-}
-
-private extension AnyTransition {
-    static var island: AnyTransition {
-        .asymmetric(insertion: .modifier(active: Island(shown: false), identity: Island(shown: true)).animation(.spring(duration: 0.5, bounce: 0.18)),
-                    removal: .modifier(active: Island(shown: false), identity: Island(shown: true)).animation(.spring(duration: 0.4, bounce: 0)))
     }
 }
 

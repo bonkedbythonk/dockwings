@@ -25,6 +25,9 @@ struct WingItem {
     let widest: AnyView
     /// For a widget that can grow: builds it with the spare width on its side.
     var flex: ((CGFloat) -> AnyView)?
+    /// Shown only when it fits on a main page; never sent to a later page
+    /// (the music widget while the song also plays in the notch).
+    var onlyIfRoom = false
 
     init<V: View, W: View>(_ id: String, _ home: Side, show: Bool, priority: Int, bump: AnyHashable = 0,
                            @ViewBuilder _ view: () -> V, @ViewBuilder widest: () -> W) {
@@ -100,7 +103,7 @@ final class WingPlan: ObservableObject {
         // so a small widget fills a gap instead of waiting for a new page.
         var used: [CGFloat] = []
         for item in items.sorted(by: { $0.priority > $1.priority })
-        where item.home == side && placedSide[item.id] == nil {
+        where item.home == side && placedSide[item.id] == nil && !item.onlyIfRoom {
             let width = widths[item.id] ?? 140
             if let i = used.indices.first(where: { used[$0] + Self.minSpacing + width <= room }) {
                 pages[i + 1].append(item)
@@ -149,8 +152,18 @@ final class WingPlan: ObservableObject {
         return (Self.minDockMargin, max(Self.minSpacing, (free - Self.minDockMargin) / gaps))
     }
 
-    func setSpace(left: CGFloat, right: CGFloat) {
-        if space[.left] != left || space[.right] != right { space = [.left: left, .right: right] }
+    /// Apps dragged in among a side's spacers (Dock bar), in that wing's
+    /// coordinates: widgets go around them.
+    @Published private(set) var holes: [Side: [ClosedRange<CGFloat>]] = [:]
+
+    func setSpace(left: CGFloat, right: CGFloat, holes: [Side: [ClosedRange<CGFloat>]] = [:]) {
+        // Room for widgets is the side minus its holes (and a gap at each).
+        func room(_ w: CGFloat, _ side: Side) -> CGFloat {
+            w - (holes[side] ?? []).reduce(0) { $0 + $1.upperBound - $1.lowerBound + Self.spacing }
+        }
+        let next: [Side: CGFloat] = [.left: room(left, .left), .right: room(right, .right)]
+        if space != next { space = next }
+        if self.holes != holes { self.holes = holes }
     }
 
     func measured(_ id: String, _ width: CGFloat) {
@@ -180,6 +193,24 @@ final class WingPlan: ObservableObject {
         // page (weather keeps a paused player company).
         for item in ranked { tryPlace(item, on: item.home) }
         for item in ranked where placed[item.id] == nil && item.priority > 3 { tryPlace(item, on: item.home == .left ? .right : .left) }
+        // Dock bar: both sides are part of one Dock, so even them out (one
+        // side full while the other sits empty looks broken). Each move must
+        // make the difference smaller, so this ends.
+        if Config.bar {
+            while true {
+                let full: Side = used[.left]! >= used[.right]! ? .left : .right
+                let other: Side = full == .left ? .right : .left
+                let diff = used[full]! - used[other]!
+                let best = ranked.filter { placed[$0.id] == full }
+                    .map { ($0.id, (widths[$0.id] ?? 140) + Self.minSpacing) }
+                    .filter { used[other]! + $0.1 <= room(other) && abs(diff - 2 * $0.1) < diff }
+                    .min { abs(diff - 2 * $0.1) < abs(diff - 2 * $1.1) }
+                guard let (id, w) = best else { break }
+                placed[id] = other
+                used[full]! -= w
+                used[other]! += w
+            }
+        }
         placedSide = placed
         // Home widgets keep their order; guests sit at the Dock end.
         let home = items.filter { $0.home == side && placed[$0.id] == side }
@@ -210,6 +241,10 @@ struct WingSide: View {
     @ObservedObject private var shelf: Shelf
     /// Bumped when a widget is switched on or off in Settings.
     @State private var prefsVersion = 0
+    /// The widget a fresh notch alert is about, and a count that hops it.
+    @State private var attention: (id: String, count: Int) = ("", 0)
+    @State private var lastPointsAt: String?
+    private let musicInNotch = Config.bar && Notch.locate() != nil
 
     init(side: Side, models: WingModels, plan: WingPlan, pointer: WingPointer) {
         self.side = side
@@ -232,7 +267,8 @@ struct WingSide: View {
         let claudeActive = focus.map { $0.session.state != .done } ?? false
         let list = [
             // Left wing, corner to Dock: passive info at the corner, music by the Dock.
-            WingItem("mac", .left, show: health.batteryTime != nil || health.celsius != nil, priority: health.needsCharge ? 7 : 0,
+            // The Batteries widget shows the Mac too: no second Mac widget then.
+            WingItem("mac", .left, show: (health.batteryTime != nil || health.celsius != nil) && !batteries.items.contains { $0.id == "mac" }, priority: health.needsCharge ? 7 : 0,
                      bump: health.needsCharge) { MacView(health: health) },
             WingItem("weather", .left, show: weather.temperature != nil, priority: 1, bump: weather.symbol) { WeatherView(weather: weather) },
             // While a file is dragged the shelf outranks everything, and while
@@ -245,10 +281,14 @@ struct WingSide: View {
             WingItem("health", .left, show: health.issue != nil, priority: health.issue?.critical == true ? 8 : 5,
                      bump: health.issue?.key) { HealthView(health: health) },
             {
-                var item = WingItem("music", .left, show: !music.title.isEmpty && !music.idle, priority: music.settled ? 3 : 6, bump: music.trackKey) {
+                // With the Dock bar a playing track lives in the notch; the
+                // Dock keeps the widget too, last in line, when there is room.
+                let alsoInNotch = musicInNotch && music.isPlaying
+                var item = WingItem("music", .left, show: !music.title.isEmpty && !music.idle, priority: alsoInNotch ? 0 : music.settled ? 3 : 6, bump: music.trackKey) {
                     MusicView(music: music, height: pointer.boxHeight)
                 }
                 item.flex = { [music, pointer] extra in AnyView(MusicView(music: music, height: pointer.boxHeight, extra: extra)) }
+                item.onlyIfRoom = alsoInNotch
                 return item
             }(),
             WingItem("claude", .right, show: focus != nil, priority: claudeActive ? 7 : 2, bump: "\(focus?.id ?? "")\(String(describing: focus?.session.state))") { ClaudeView(claude: claude) },
@@ -274,29 +314,38 @@ struct WingSide: View {
     var body: some View {
         let _ = prefsVersion
         let shown = items
-        let hidden = !presence.shown || (side == .right && presence.screenshotThumbnail)
+        // With the Dock bar the screenshot thumbnail sits above the Dock: no need to step aside.
+        let hidden = !presence.shown || (side == .right && presence.screenshotThumbnail && !Config.bar)
         let pages = plan.pages(shown, for: side, pinned: wanikani.reviewing ? "wanikani" : nil)
         let pageIndex = min(plan.page[side] ?? 0, pages.count - 1)
         let visible = hidden ? [] : withReviewTile(pages[pageIndex], pages)
         let spare = plan.spare(visible, on: side)
         let fit = plan.fit(visible, on: side)
         ZStack(alignment: Alignment(horizontal: side == .left ? .leading : .trailing, vertical: .bottom)) {
-            HStack(spacing: fit.spacing) {
+            WingRow(spacing: fit.spacing, margin: WingPlan.margin, fromRight: side == .right, holes: plan.holes[side] ?? []) {
                 ForEach(visible, id: \.id) { item in
                     let dark = inkState.dark[item.id] ?? inkState.dark[Ink.key(side)] ?? false
                     (item.flex?(spare) ?? item.view)
+                        // Inside the Dock (`Bar` key): the Dock's separator line between widgets.
+                        .background(alignment: .leading) {
+                            if Config.bar && item.id != visible.first?.id {
+                                Rectangle().fill(.white.opacity(0.35)).frame(width: 1, height: pointer.boxHeight * 0.62)
+                                    .offset(x: -fit.spacing / 2)
+                            }
+                        }
                         .modifier(Legibility(dark: dark, mixed: inkState.mixed.contains(item.id)))
                         .environment(\.inkDark, dark)
                         .animation(.smooth(duration: 0.6), value: dark)
                         .modifier(Bump(trigger: item.bump))
+                        // A notch alert about this widget: it hops like a Dock
+                        // icon asking for attention.
+                        .modifier(Hop(trigger: attention.id == item.id ? attention.count : 0))
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("wing")) } action: { pointer.frames[item.id] = $0 }
                         .scaleEffect(pointer.scale(at: pointer.frames[item.id]), anchor: .bottom)
                         .transition(.rise)
                 }
             }
             .frame(height: pointer.boxHeight)
-            .padding(side == .left ? .leading : .trailing, WingPlan.margin)
-            .padding(side == .left ? .trailing : .leading, fit.dockMargin)
             // Page dots at the screen-corner end when a side has more pages.
             .overlay(alignment: side == .left ? .leading : .trailing) {
                 if pages.count > 1 && !hidden {
@@ -313,7 +362,8 @@ struct WingSide: View {
             }
             .foregroundStyle(ink(0.88))
             // Quieter than the Dock at rest, brighter while the pointer is there.
-            .opacity(pointer.x != nil ? 0.9 : 0.7)
+            // Inside the Dock widgets are as bright as the app icons.
+            .opacity(Config.bar ? 1 : pointer.x != nil ? 0.9 : 0.7)
             .environment(\.ambient, presence.visible && !hidden)
             .animation(.spring(duration: 0.55, bounce: 0.18), value: visible.map(\.id))
             .animation(.interactiveSpring(response: 0.25, dampingFraction: 0.8), value: pointer.x)
@@ -334,6 +384,13 @@ struct WingSide: View {
             .hidden()
         }
         .coordinateSpace(.named("wing"))
+        // SwiftUI subscribes again on every redraw and gets the current value
+        // each time: only a real change may hop (else it redraws forever).
+        .onReceive(Notch.shared.$pointsAt) { id in
+            guard Config.bar, id != lastPointsAt else { return }
+            lastPointsAt = id
+            if let id { attention = (id, attention.count + 1) }
+        }
         // Playing again moves music to the main page; follow it there.
         .onChange(of: music.isPlaying) { _, playing in
             guard playing, plan.side(of: "music") == side, (plan.page[side] ?? 0) != 0 else { return }
@@ -350,11 +407,67 @@ private struct Bump: ViewModifier {
     let trigger: AnyHashable
 
     func body(content: Content) -> some View {
-        content.keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, scale in
+        let grow = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 1.0 : 1.09
+        return content.keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, scale in
             view.scaleEffect(scale, anchor: .bottom)
         } keyframes: { _ in
-            SpringKeyframe(1.09, duration: 0.16, spring: .snappy)
+            SpringKeyframe(grow, duration: 0.16, spring: .snappy)
             SpringKeyframe(1.0, duration: 0.45, spring: .bouncy)
+        }
+    }
+}
+
+/// The Dock's attention bounce: two hops, the second smaller. None with
+/// Reduce Motion on.
+private struct Hop: ViewModifier {
+    let trigger: Int
+
+    func body(content: Content) -> some View {
+        let height: CGFloat = trigger == 0 || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 10
+        return content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, y in
+            view.offset(y: y)
+        } keyframes: { _ in
+            SpringKeyframe(-height, duration: 0.2, spring: .snappy)
+            SpringKeyframe(0, duration: 0.28, spring: .smooth)
+            SpringKeyframe(-height / 2, duration: 0.16, spring: .snappy)
+            SpringKeyframe(0, duration: 0.3, spring: .bouncy)
+        }
+    }
+}
+
+/// A wing's row of widgets, packed from its screen-corner end with `margin`
+/// and `spacing`, vertically centred. A widget that would cover a hole (an
+/// app dragged in among the Dock bar's spacers) moves past it.
+struct WingRow: Layout {
+    var spacing: CGFloat
+    var margin: CGFloat
+    var fromRight: Bool
+    var holes: [ClosedRange<CGFloat>]
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let natural = sizes.reduce(0) { $0 + $1.width } + CGFloat(max(sizes.count - 1, 0)) * spacing + margin
+        return CGSize(width: proposal.width ?? natural, height: proposal.height ?? sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        if fromRight {
+            var x = bounds.width - margin
+            for i in subviews.indices.reversed() {
+                let w = sizes[i].width
+                if let hole = holes.first(where: { x - w < $0.upperBound + spacing / 2 && x > $0.lowerBound - spacing / 2 }) { x = hole.lowerBound - spacing }
+                subviews[i].place(at: CGPoint(x: bounds.minX + x - w, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(sizes[i]))
+                x -= w + spacing
+            }
+        } else {
+            var x = margin
+            for i in subviews.indices {
+                let w = sizes[i].width
+                if let hole = holes.first(where: { x < $0.upperBound + spacing / 2 && x + w > $0.lowerBound - spacing / 2 }) { x = hole.upperBound + spacing }
+                subviews[i].place(at: CGPoint(x: bounds.minX + x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(sizes[i]))
+                x += w + spacing
+            }
         }
     }
 }

@@ -234,7 +234,37 @@ struct World {
     var notchDepth: CGFloat = 0
     /// The Dock's icons: walked across, never stopped on (clicks there go to the Dock).
     var dock: ClosedRange<CGFloat>?
+    /// Widgets inside the Dock (Dock bar): also walked across, never
+    /// stopped on, so nobody sits on their text.
+    var widgets: [ClosedRange<CGFloat>] = []
     var size: CGFloat
+
+    /// Where nobody stops: the Dock's icons and the widgets, each with a
+    /// margin of about half a body, overlapping spans merged, left to right.
+    /// When the widgets leave no free spot at all, only the icons count.
+    var noStop: [ClosedRange<CGFloat>] {
+        let all = merged((dock.map { [$0] } ?? []) + widgets)
+        if all.contains(where: { $0.lowerBound <= lane.lowerBound && $0.upperBound >= lane.upperBound }) {
+            return merged(dock.map { [$0] } ?? [])
+        }
+        return all
+    }
+
+    private func merged(_ spans: [ClosedRange<CGFloat>]) -> [ClosedRange<CGFloat>] {
+        let m = size * 0.6
+        var out: [ClosedRange<CGFloat>] = []
+        for r in spans.map({ ($0.lowerBound - m)...($0.upperBound + m) }).sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = out.last, r.lowerBound <= last.upperBound {
+                out[out.count - 1] = last.lowerBound...max(last.upperBound, r.upperBound)
+            } else {
+                out.append(r)
+            }
+        }
+        return out
+    }
+
+    /// The no-stop span `x` is in, if any.
+    func blocked(_ x: CGFloat) -> ClosedRange<CGFloat>? { noStop.first { x > $0.lowerBound && x < $0.upperBound } }
 
     /// Where a mascot's anchor may be along the floor or a ceiling.
     var lane: ClosedRange<CGFloat> { (minX + size * 0.5)...max(minX + size * 0.5, maxX - size * 0.5) }
@@ -257,6 +287,8 @@ struct Signals: Equatable {
     var idleSeconds: Double = 0
     var typing = false
     var lowBattery = false
+    /// The Batteries widget, where a buddy naps beside it on low battery.
+    var batteryX: CGFloat?
     var hot = false
     /// A fresh download or screenshot, at this x.
     var attentionX: CGFloat?
@@ -375,16 +407,20 @@ enum Brain {
     static func decide(_ s: MascotState, world w: World, signals: Signals, moves m: Moves, dice d: inout Dice) -> [Step] {
         var plan = plan(s, world: w, signals: signals, moves: m, dice: &d)
         if plan.isEmpty { plan = [.play("Stand", seconds: 1)] }
-        return spaced(offDock(plan, from: s, world: w, moves: m), from: s, others: signals.others, world: w, moves: m)
+        plan = spaced(offDock(plan, from: s, world: w, moves: m), from: s, others: signals.others, world: w, moves: m)
+        // A plan that takes no time (its walk cut to nothing) would be asked
+        // for again at once, forever: stand a moment instead.
+        let takesTime = plan.contains { switch $0 { case .play, .move, .flight: true; default: false } }
+        return takesTime ? plan : plan + [.play("Stand", seconds: 1)]
     }
 
     /// A free spot on the floor near `x`: a body-width from every other
     /// buddy and off the Dock's icons; `x` itself when it is free.
     static func freeSpot(near x: CGFloat, others: [CGFloat], world w: World) -> CGFloat {
-        let gap = w.size * 0.9, margin = w.size * 0.6
+        let gap = w.size * 0.9
         func free(_ c: CGFloat) -> Bool {
             if others.contains(where: { abs($0 - c) < gap }) { return false }
-            if let d = w.dock, c > d.lowerBound - margin, c < d.upperBound + margin { return false }
+            if w.blocked(c) != nil { return false }
             return w.lane.contains(c)
         }
         if free(x) { return x }
@@ -454,15 +490,15 @@ enum Brain {
     /// Never stop over the Dock's icons: a walk that would end there ends
     /// beside them, and staying put there (over a second) starts with stepping off.
     static func offDock(_ plan: [Step], from s: MascotState, world w: World, moves m: Moves) -> [Step] {
-        guard let dock = w.dock else { return plan }
-        let margin = w.size * 0.6
+        guard !w.noStop.isEmpty else { return plan }
         func outside(_ x: CGFloat, toward from: CGFloat) -> CGFloat {
-            let lo = dock.lowerBound - margin, hi = dock.upperBound + margin
-            guard x > lo, x < hi else { return x }
-            // The nearer side, preferring the side it comes from.
-            let left = from <= dock.lowerBound ? true : from >= dock.upperBound ? false : x - lo < hi - x
-            let edge = left ? lo : hi
-            return min(max(edge, w.lane.lowerBound), w.lane.upperBound)
+            guard let z = w.blocked(x) else { return x }
+            let lo = z.lowerBound, hi = z.upperBound
+            // The nearer side, preferring the side it comes from; the other
+            // side when that one is past the screen edge.
+            var left = from <= lo ? true : from >= hi ? false : x - lo < hi - x
+            if left, lo < w.lane.lowerBound { left = false } else if !left, hi > w.lane.upperBound { left = true }
+            return w.clampX(left ? lo : hi)
         }
         var out: [Step] = []
         var here = s.position
@@ -471,11 +507,13 @@ enum Brain {
             switch step {
             case .move(let name, let to, let seconds) where onFloor && to.y == w.floor && !["ClimbWall", "ClimbCeiling"].contains(name):
                 let x = outside(to.x, toward: here.x)
+                // Cut short to nothing (already at the edge): no walking in place.
+                guard abs(x - here.x) >= 1 else { continue }
                 let k = abs(to.x - here.x) > 0.5 ? abs(x - here.x) / abs(to.x - here.x) : 1
                 out += [.face(right: x > here.x), .move(name, to: CGPoint(x: x, y: to.y), seconds: seconds * Double(k))]
                 here = CGPoint(x: x, y: to.y)
             // A landing's short bounce may happen there; anything longer may not.
-            case .play(_, let seconds) where seconds > 1 && onFloor && here.x > dock.lowerBound - margin && here.x < dock.upperBound + margin:
+            case .play(_, let seconds) where seconds > 1 && onFloor && w.blocked(here.x) != nil:
                 let x = outside(here.x, toward: here.x)
                 let speed = max(m.action("Walk").speed(size: w.size), w.size * 0.2)
                 out += [.face(right: x > here.x), .move("Walk", to: CGPoint(x: x, y: w.floor), seconds: Double(abs(x - here.x) / speed)), step]
@@ -581,7 +619,13 @@ enum Brain {
            abs(other - here.x) < size * 2.2, abs(other - here.x) >= size * 0.9, d.chance(0.35) {
             return [.face(right: other > here.x)] + sit("Sit", 4...8, &d)
         }
-        if signals.lowBattery, d.chance(0.5) { return sit(d.chance(0.5) ? "Sprawl" : "Sit", 5...10, &d) }
+        if signals.lowBattery, d.chance(0.5) {
+            // Tired with the Mac: off to the Batteries widget to flop beside it.
+            if let bx = signals.batteryX, s.surface == .floor, abs(clamp(bx) - here.x) > size * 1.2 {
+                return go(bx + (bx > here.x ? -1 : 1) * size)
+            }
+            return sit(d.chance(0.6) ? "Sprawl" : "Sit", 5...10, &d)
+        }
 
         let r = d.unit()
         // On a window: walk along it, dangle legs at an edge, or get down.
@@ -642,19 +686,13 @@ enum Brain {
     /// it on its own side (past the Dock's icons if they are in the way), or
     /// past the pointer when cornered against the screen edge.
     static func flee(_ s: MascotState, from px: CGFloat, world w: World, moves m: Moves) -> [Step] {
-        let margin = w.size * 0.6
-        // Three widths that way; across the Dock's icons if that lands on them.
+        // Three widths that way; across the Dock's icons or a widget if that lands on them.
         func spot(_ dir: CGFloat) -> CGFloat {
             var x = w.clampX(px + dir * w.size * 3)
-            if let d = w.dock, x > d.lowerBound - margin, x < d.upperBound + margin {
-                x = w.clampX(dir > 0 ? d.upperBound + margin : d.lowerBound - margin)
-            }
+            if let z = w.blocked(x) { x = w.clampX(dir > 0 ? z.upperBound : z.lowerBound) }
             return x
         }
-        func good(_ x: CGFloat) -> Bool {
-            let onDock = w.dock.map { x > $0.lowerBound - margin && x < $0.upperBound + margin } ?? false
-            return abs(x - px) >= w.size * 2 && !onDock
-        }
+        func good(_ x: CGFloat) -> Bool { abs(x - px) >= w.size * 2 && w.blocked(x) == nil }
         let away: CGFloat = s.position.x >= px ? 1 : -1
         var x = spot(away)
         if !good(x), good(spot(-away)) { x = spot(-away) }

@@ -76,7 +76,7 @@ final class Health: ObservableObject {
         }
         watchers.append(Drawers.shared.$open.receive(on: RunLoop.main).sink { [weak self] open in
             guard let self else { return }
-            live = open == "mac"
+            live = open == "mac" || open == "batteries"
             if live { updateTop() }
         })
         thermal = Thermal()

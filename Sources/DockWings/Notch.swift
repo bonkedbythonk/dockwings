@@ -6,7 +6,9 @@
 // card, a swipe up dismisses. Alerts: Claude (needs you, done), headphones,
 // power, heat, downloads (Downloads.swift), the volume and brightness HUD
 // (MediaKeys.swift) and the file tray while dragging. Music, shelf and the
-// rest stay in the wings. In full screen only the HUD shows. The shape
+// rest stay in the wings, except with the Dock bar (`Bar` key): there the
+// playing track lives here, and in full screen music and a Claude chat that
+// needs you stay too. Otherwise in full screen only the HUD shows. The shape
 // springs out of the notch with outward-curved top corners; content fades
 // in as it settles. The window is fixed, top-centred on the notch; only the
 // shape inside morphs. AppDelegate places it (independent of the Dock).
@@ -33,7 +35,7 @@ struct NotchAlert {
     /// Needs you: opens as the card for a few seconds, then stays compact.
     var opensCard = false
     /// No card: a click on the notch runs the action at once (the WaniKani
-    /// tile, whose drawer grows out of the notch like the Dynamic Island).
+    /// tile, which opens its drawer).
     var tapOpens = false
     /// Shows at once, ahead of whatever is on screen (the volume HUD).
     var jumpsQueue = false
@@ -49,11 +51,34 @@ struct NotchAlert {
 final class Notch: ObservableObject {
     static let shared = Notch()
 
-    @Published private(set) var alert: NotchAlert?
+    @Published private(set) var alert: NotchAlert? {
+        didSet {
+            let widget = Self.widget(for: alert?.id)
+            if pointsAt != widget { pointsAt = widget }
+        }
+    }
+    /// The Dock widget the current alert is about (it hops when this
+    /// changes), nil for none. Changes only with the alert, so the wings
+    /// don't redraw on hover.
+    @Published private(set) var pointsAt: String?
+
+    static func widget(for id: String?) -> String? {
+        guard let id else { return nil }
+        if id.hasPrefix("claude-") { return "claude" }
+        if id.hasPrefix("wk-") { return "wanikani" }
+        switch id {
+        case "pods", "power", "thermal": return "batteries"
+        case "kept": return "shelf"
+        default: return nil
+        }
+    }
     /// The pointer is over the shape.
     @Published var hovering = false {
         didSet {
-            if !hovering { clicked = false }
+            // A review in the grown WaniKani panel stays open when the pointer
+            // leaves (typing answers shouldn't need it up here); a click
+            // elsewhere still closes it.
+            if !hovering { clicked = false; if !reviewing { expanded = false } }
             if !hovering, let id = finishWhenLeft { finishWhenLeft = nil; clear(id) }
         }
     }
@@ -62,14 +87,17 @@ final class Notch: ObservableObject {
     @Published private var clicked = false
 
     func run(_ a: NotchAlert) {
-        cardShown = false
-        clicked = true
+        fold()
         a.action?()
     }
+
+    /// Closes the card until the pointer leaves, so what a click opened
+    /// right below (the music drawer) isn't covered by it.
+    func fold() {
+        cardShown = false
+        clicked = true
+    }
     @Published private(set) var cardShown = false
-    /// The WaniKani drawer is open: it grew out of the notch, so the notch's
-    /// WaniKani tile steps back meanwhile. Set by the drawer.
-    @Published var yielded = false
     /// The notch window can be seen (looping animations stop otherwise).
     @Published var visible = true
     /// Size of the hardware notch.
@@ -77,7 +105,7 @@ final class Notch: ObservableObject {
     /// The shape's frame in the window (top-left origin).
     var frame = CGRect.zero
 
-    static let windowSize = CGSize(width: 480, height: 280)
+    static let windowSize = CGSize(width: 480, height: 640)
 
     /// Swipe down on the notch: the alert's card.
     func swipeDown() {
@@ -86,20 +114,31 @@ final class Notch: ObservableObject {
 
     /// Swipe up: closes the card, else sends the alert away.
     func swipeUp() {
-        if cardShown { cardShown = false } else if let a = alert, a.id != "drop" { forceClear(a.id) }
+        // The playing track stays: swiping up only closes its card or player.
+        if expanded { expanded = false; cardShown = false; clicked = true }
+        else if cardShown { cardShown = false }
+        // Ongoing things (music, WaniKani, a chat that needs you: no timer)
+        // aren't swiped away, only passing alerts.
+        else if let a = alert, a.id != "drop", a.duration > 0 { forceClear(a.id) }
     }
 
     /// Hover or a swipe opens the alert's card; an alert that needs you opens
     /// it by itself. During a file drag the drop card is open from the start,
     /// reaching well below the screen edge (dragging up to the very top opens
     /// Mission Control).
-    var showsCard: Bool { alert != nil && alert?.id != "hud" && alert?.tapOpens != true && (cardShown || (hovering && !clicked) || (dragging && alert?.id == "drop")) }
+    var showsCard: Bool { alert != nil && alert?.id != "hud" && alert?.tapOpens != true && (cardShown || (hovering && !clicked) || (dragging && alert?.id == "drop") || (expanded && Self.grows(alert?.id))) }
+
+    /// Alerts whose card grows into a whole panel in the notch on a click:
+    /// the music, and with the Dock bar WaniKani (reviews happen up here).
+    static func grows(_ id: String?) -> Bool { id == "music" || (Config.bar && (id == "wk" || id?.hasPrefix("wk-") == true)) }
+    /// A WaniKani review is going on in the grown panel.
+    var reviewing: Bool { expanded && alert?.id.hasPrefix("wk-") == true && WKReview.shared.phase != .idle }
     /// How wide the black shape is drawn now (same sizes as NotchView), so
     /// buddies can keep clear of it.
     var shapeWidth: CGFloat {
         guard let a = alert else { return size.width }
-        if showsCard { return 350 }
-        return size.width + 2 * (a.label != nil ? 84 : 44) + 12
+        if showsCard { return alert?.id == "music" ? 440 : 350 }
+        return size.width + 2 * (a.label != nil || ears ? 84 : 44) + 12
     }
 
     /// Settings switches (on unless turned off).
@@ -110,13 +149,12 @@ final class Notch: ObservableObject {
     @Published var fullScreen = false {
         didSet {
             guard fullScreen != oldValue, fullScreen else { return }
-            for id in [alert?.id].compactMap({ $0 }) + queue.map(\.id) where !Self.fullScreenSafe.contains(id) { forceClear(id) }
+            for id in [alert?.id].compactMap({ $0 }) + queue.map(\.id) where !Self.fullScreenOK(id) { forceClear(id) }
         }
     }
 
     /// The screen is locked: the notch sits on the lock screen and shows
-    /// only the HUD and charging, nothing private (the player is its own
-    /// lock screen widget).
+    /// only the HUD and charging, nothing private.
     @Published var locked = false {
         didSet {
             guard locked != oldValue else { return }
@@ -126,9 +164,15 @@ final class Notch: ObservableObject {
             lockChanged?(locked)
         }
     }
-    static let lockSafe: Set<String> = ["hud", "power"]
-    /// Shown over a full-screen app too (WaniKani lessons run in a full-screen browser).
-    static let fullScreenSafe: Set<String> = ["hud", "wk-lessons", "wk-reviews"]
+    /// Music too: like the system's own lock screen player (Dock bar only posts it).
+    static let lockSafe: Set<String> = ["hud", "power", "music"]
+    /// Shown over a full-screen app too (WaniKani lessons run in a full-screen
+    /// browser). With the Dock bar the Dock's widgets are hidden there, so
+    /// the notch also keeps the music and a Claude chat that needs you.
+    static func fullScreenOK(_ id: String) -> Bool {
+        ["hud", "wk-lessons", "wk-reviews"].contains(id)
+            || (Config.bar && (id == "music" || (id.hasPrefix("claude-") && !id.hasPrefix("claude-done"))))
+    }
     var lockChanged: ((Bool) -> Void)?
 
     private var queue: [NotchAlert] = []
@@ -140,10 +184,13 @@ final class Notch: ObservableObject {
     /// back compact afterwards.
     func post(_ a: NotchAlert) {
         if locked && !Self.lockSafe.contains(a.id) { return }
-        if a.id != "hud" && ((fullScreen && !Self.fullScreenSafe.contains(a.id)) || !Self.alertsOn) { return }
+        if a.id != "hud" && ((fullScreen && !Self.fullScreenOK(a.id)) || !Self.alertsOn) { return }
         var a = a
         a.posted = Date()
         queue.removeAll { $0.id == a.id }
+        // A WaniKani review open in the notch isn't interrupted: other
+        // alerts (the volume HUD aside) wait until it closes.
+        if reviewing, a.id != "hud", !a.id.hasPrefix("wk-") { queue.append(a); return }
         guard var current = alert, current.id != a.id else { show(a); return }
         if current.duration > 0 && a.duration > 0 && !a.jumpsQueue { queue.append(a); return }
         if current.duration == 0 {
@@ -171,7 +218,9 @@ final class Notch: ObservableObject {
         // Moments that waited too long are old news.
         queue.removeAll { $0.duration > 0 && Date().timeIntervalSince($0.posted) > 8 }
         guard !queue.isEmpty else { return }
-        let next = queue.removeFirst()
+        // Others before the music: it joins them beside the camera (shared
+        // notch), while one waiting behind the music would be hidden.
+        let next = queue.remove(at: queue.firstIndex { $0.id != "music" } ?? 0)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if self.alert == nil { self.show(next) } }
     }
 
@@ -210,6 +259,57 @@ final class Notch: ObservableObject {
     var onDrop: (([URL]) -> Void)?
 
     private var feeds: [AnyCancellable] = []
+
+    /// The playing track's alert while it lives in the notch (Dock bar).
+    @Published private(set) var music: NotchAlert?
+    /// The player, for the music card.
+    private(set) var player: Music?
+    /// The music card was clicked: the notch grows into the whole player
+    /// (lyrics, up next, search) until the pointer leaves it.
+    @Published var expanded = false {
+        didSet {
+            // The WaniKani panel opened from the Dock goes once it closes.
+            if oldValue, !expanded { clear("wk-open") }
+            // A review closed: whatever waited behind it (Claude needing you)
+            // comes up now, the review's tile stepping back.
+            guard oldValue, !expanded, alert?.id.hasPrefix("wk-") == true, let i = queue.firstIndex(where: { $0.id != "music" }) else { return }
+            let next = queue.remove(at: i)
+            post(next)
+        }
+    }
+    /// The grown WaniKani panel's own height (it fits its content: the
+    /// summary and a review question differ).
+    @Published var panelHeight: CGFloat = 0
+    /// Another one-line alert while music plays: they share the notch, the
+    /// track left of the camera and the alert right of it.
+    var ears: Bool { music != nil && alert.map { $0.id != "music" && $0.label == nil } == true }
+
+    /// Dock bar: the playing track lives in the notch (cover left of the
+    /// camera, live levels right; hover for the card, click opens the
+    /// player) and the Dock's music widget steps aside meanwhile. Another
+    /// alert shares the notch with it (`ears`) and the track takes the whole
+    /// notch again afterwards.
+    func watch(music: Music) {
+        guard Config.bar, Self.locate() != nil else { return }
+        player = music
+        var last: (String, String, NSImage?)?
+        feeds.append(Publishers.CombineLatest4(music.$isPlaying, music.$title, music.$artist, music.$art)
+            .receive(on: RunLoop.main).sink { [unowned self] playing, title, artist, art in
+                guard playing, !title.isEmpty else { last = nil; self.music = nil; expanded = false; clear("music"); return }
+                if let l = last, l.0 == title, l.1 == artist, l.2 === art { return }
+                last = (title, artist, art)
+                let a = NotchAlert(id: "music", icon: art.map { .image($0) } ?? .symbol("music.note", .white),
+                                   trailing: .bars(music.live), title: title, subtitle: artist, duration: 0,
+                                   action: { music.openPlayer() })
+                self.music = a
+                if let current = alert, current.id != "music" {
+                    queue.removeAll { $0.id == "music" }
+                    queue.append(a)
+                } else {
+                    post(a)
+                }
+            })
+    }
 
     /// Turns changes in the other models into alerts. Each source's first
     /// value is its baseline; only later changes alert.
@@ -350,7 +450,8 @@ struct NotchShape: Shape {
     }
 }
 
-/// Content fades in as the shape settles and leaves quicker. No blur: a blur
+/// Content fades in with the shape; the old content fades out meanwhile
+/// (cross-fading, so the bare notch never shows in between). No blur: a blur
 /// flattens the looping layer animations inside (bars, Claude's mark).
 private struct BlurIn: ViewModifier {
     let shown: Bool
@@ -361,10 +462,12 @@ private struct BlurIn: ViewModifier {
 
 private extension AnyTransition {
     static var blurIn: AnyTransition {
+        // Fades in together with the shape's change, one movement (a delay
+        // made it two: shape first, content after).
         .asymmetric(insertion: .modifier(active: BlurIn(shown: false), identity: BlurIn(shown: true))
-                        .animation(.easeOut(duration: 0.2).delay(0.14)),
+                        .animation(.easeOut(duration: 0.22)),
                     removal: .modifier(active: BlurIn(shown: false), identity: BlurIn(shown: true))
-                        .animation(.easeIn(duration: 0.08)))
+                        .animation(.easeIn(duration: 0.2)))
     }
 }
 
@@ -373,41 +476,151 @@ struct NotchView: View {
     private enum Phase: Hashable { case idle, compact(String), card(String) }
 
     private var phase: Phase {
-        guard let a = notch.alert, !(notch.yielded && a.id.hasPrefix("wk-")) else { return .idle }
-        return notch.showsCard ? .card(a.id) : .compact(a.id)
+        guard let a = notch.alert else { return .idle }
+        return notch.showsCard ? .card(Self.key(a.id)) : .compact(Self.key(a.id))
     }
 
+    /// One phase for all of WaniKani's alerts (open, reviews, lessons), so
+    /// starting reviews in the open panel morphs it instead of rebuilding it.
+    private static func key(_ id: String) -> String { id.hasPrefix("wk-") ? "wk" : id }
+
     private let cardWidth: CGFloat = 330
+    /// The playing track's cover, when it has one.
+    private var musicArt: NSImage? {
+        if case let .image(art)? = notch.music?.icon { return art }
+        return nil
+    }
+    /// The current alert's picture when it is WaniKani's tile.
+    private var wkTile: NSImage? {
+        if let a = notch.alert, a.id.hasPrefix("wk-"), Notch.grows(a.id), case let .image(tile) = a.icon { return tile }
+        return nil
+    }
+    /// The picture that slides between the small notch and the card, and
+    /// where it sits now (centre x in the shape, side); nil when hidden.
+    /// Shared with music, the song's cover keeps the left spot and the other
+    /// alert's icon sits right of the camera as usual.
+    private func slide(flare: CGFloat) -> (art: NSImage, x: CGFloat, size: CGFloat)? {
+        switch phase {
+        case .card(let id) where Notch.grows(id):
+            return (id == "music" ? musicArt : wkTile).map { ($0, flare + 20 + 11, 22) }
+        case .compact where notch.ears:
+            return musicArt.map { ($0, flare + 10 + 10, 20) }
+        case .compact(let id) where Notch.grows(id):
+            return (id == "music" ? musicArt : wkTile).map { ($0, flare + hudSide / 2, 20) }
+        default: return nil
+        }
+    }
+
+    /// The music or WaniKani card's height: small, or grown into the panel
+    /// (the music player a fixed size, WaniKani as tall as its content).
+    private var cardHeight: CGFloat {
+        let n = notch.size
+        guard notch.expanded else { return n.height + 74 }
+        if notch.alert?.id.hasPrefix("wk-") == true, notch.panelHeight > 0 { return notch.panelHeight }
+        return n.height + 446
+    }
+
+    /// Solid black down past the hardware notch (its bottom edge would
+    /// otherwise show against the colour), then the cover's colour.
+    private func coverFade(height: CGFloat?) -> LinearGradient {
+        let tint = notch.alert?.id.hasPrefix("wk-") == true ? WK.pink : notch.player?.artColor
+        let art = tint.map { NSColor($0).blended(withFraction: 0.5, of: .black) ?? .black } ?? NSColor(white: 0.12, alpha: 1)
+        let black = min(0.8, (notch.size.height + 10) / max(height ?? 120, 1))
+        return LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: black),
+                                      .init(color: Color(nsColor: art).opacity(0.82), location: 1)],
+                              startPoint: .top, endPoint: .bottom)
+    }
+    private let musicCardWidth: CGFloat = 440
     /// One-line alerts and the HUD: both sides as wide, so the notch grows
     /// evenly around the camera.
     private let hudSide: CGFloat = 44
     /// The HUD, like Alcove's: icon and "Sound" on the left, a long bar on the right.
     private let hudWide: CGFloat = 84
 
+    /// `NotchStyle` key: "island" puts every alert in a glass pill below the
+    /// notch; "card" keeps the compact alert black and drops the card below
+    /// in glass. Otherwise all of it is the black shape.
+    private var inGlass: Bool {
+        switch (Config.notchStyle, phase) {
+        case ("island", .compact), ("island", .card), ("card", .card): true
+        default: false
+        }
+    }
+
     var body: some View {
         let n = notch.size
+        let glass = inGlass
         let (width, height, flare, bottom): (CGFloat, CGFloat?, CGFloat, CGFloat) = switch phase {
         case .idle: (n.width - 6, n.height - 2, 0, 8)
-        case .compact where notch.alert?.label != nil: (n.width + 2 * hudWide + 12, n.height, 6, 12)
+        case _ where glass: (n.width - 6, n.height - 2, 0, 8)
+        case .compact where notch.alert?.label != nil || notch.ears: (n.width + 2 * hudWide + 12, n.height, 6, 12)
         case .compact: (n.width + 2 * hudSide + 12, n.height, 6, 10)
-        case .card: (cardWidth + 20, notch.alert?.approve != nil ? nil : n.height + 62, 10, 24)
+        // Fixed heights, so the notch springs between card and player
+        // instead of jumping to the content's size.
+        case .card where Notch.grows(notch.alert?.id): (musicCardWidth, cardHeight, 10, 24)
+        case .card: (cardWidth + 20, notch.alert?.approve != nil || notch.alert?.id == "music" ? nil : n.height + 62, 10, 24)
         }
-        ZStack(alignment: .top) {
-            NotchShape(flare: flare, bottom: bottom).fill(.black)
-            Group {
-                switch phase {
-                case .idle: EmptyView()
-                case .compact: notch.alert.map { compact($0) }
-                case .card: notch.alert.map { card($0) }
+        VStack(spacing: 6) {
+            ZStack(alignment: .top) {
+                // With music the background is one fixed picture as tall as
+                // the card or player: black down past the camera, then the
+                // cover's colour (darkened, so white text reads) over frosted
+                // glass. The growing notch shape only reveals more of it, so
+                // opening is one movement (separate fades read as stages).
+                Group {
+                    if Notch.grows(notch.alert?.id) {
+                        let full = cardHeight
+                        ZStack(alignment: .top) {
+                            GlassBackground(cornerRadius: 0)
+                            Rectangle().fill(coverFade(height: full))
+                        }
+                        .frame(height: full)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    } else {
+                        Color.black
+                    }
+                }
+                .mask(NotchShape(flare: flare, bottom: bottom))
+                Group {
+                    switch phase {
+                    case .idle: EmptyView()
+                    case _ where glass: EmptyView()
+                    case .compact(let id) where Notch.grows(id): EmptyView()
+                    case .compact: notch.alert.map { compact($0) }
+                    case .card: notch.alert.map { card($0) }
+                    }
+                }
+                .id(phase)
+                .transition(.blurIn)
+                .padding(.horizontal, flare)
+                // The music's small notch (cover, levels) is one lasting view
+                // that fades out while the card fades in: swapped out like the
+                // rest, the bare notch showed for a frame between them.
+                if !glass, let a = notch.alert, Notch.grows(a.id) {
+                    compact(a)
+                        .opacity(phase == .compact(Self.key(a.id)) ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.25), value: phase)
+                        .padding(.horizontal, flare)
+                        .allowsHitTesting(phase == .compact(Self.key(a.id)))
+                }
+                // The song's cover, drawn once so it slides between the small
+                // notch (left of the camera) and the card's corner.
+                if !glass, let spot = slide(flare: flare) {
+                    Image(nsImage: spot.art).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: spot.size, height: spot.size)
+                        .clipShape(RoundedRectangle(cornerRadius: spot.size * 0.24, style: .continuous))
+                        .position(x: spot.x, y: n.height / 2)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
             }
-            .id(phase)
-            .transition(.blurIn)
-            .padding(.horizontal, flare)
+            .frame(width: width, height: height, alignment: .top)
+            .fixedSize(horizontal: false, vertical: height == nil)
+            // Content stays inside the shape while it shrinks.
+            .mask(NotchShape(flare: flare, bottom: bottom))
+            if glass, let a = notch.alert { glassBox(a) }
         }
-        .frame(width: width, height: height)
-        .fixedSize(horizontal: false, vertical: height == nil)
-                .dropDestination(for: URL.self) { urls, _ in
+        .dropDestination(for: URL.self) { urls, _ in
             notch.onDrop?(urls)
             return true
         } isTargeted: { on in
@@ -415,23 +628,72 @@ struct NotchView: View {
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { notch.frame = $0 }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.spring(duration: 0.36, bounce: 0.1), value: phase)
+        // No overshoot: a bounce read as a second step.
+        .animation(.smooth(duration: 0.34), value: phase)
+        // Music leaving or joining while another alert shows (the shared
+        // notch) changes no phase; animate that too instead of jumping.
+        .animation(.smooth(duration: 0.34), value: notch.ears)
+        // The WaniKani panel changing size (summary, a question, its info).
+        .animation(.smooth(duration: 0.34), value: notch.panelHeight)
         .environment(\.ambient, notch.visible)
         .foregroundStyle(.white)
     }
 
-    @ViewBuilder
-    private func compact(_ a: NotchAlert) -> some View {
-        if a.tapOpens {
-            Button { notch.run(a) } label: { compactRow(a).contentShape(Rectangle()) }.buttonStyle(.plain)
-        } else {
-            compactRow(a)
+    /// The alert on glass below the notch, the bar's material and corners.
+    private func glassBox(_ a: NotchAlert) -> some View {
+        let isCard = if case .card = phase { true } else { false }
+        return Group {
+            if isCard {
+                card(a, top: 14).frame(width: cardWidth + 20)
+            } else {
+                compact(a, island: true)
+            }
         }
+        .id(phase)
+        .transition(.blurIn)
+        .background(GlassBackground(cornerRadius: isCard ? 24 : 15))
+        .transition(.scale(scale: 0.5, anchor: .top).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private func compact(_ a: NotchAlert, island: Bool = false) -> some View {
+        let row = Group { if island { islandRow(a) } else { compactRow(a) } }
+        if a.tapOpens {
+            Button { notch.run(a) } label: { row.contentShape(Rectangle()) }.buttonStyle(.plain)
+        } else {
+            row
+        }
+    }
+
+    /// The compact alert as a pill: no gap for the camera.
+    private func islandRow(_ a: NotchAlert) -> some View {
+        HStack(spacing: 8) {
+            if case .none = a.icon {} else { NotchIcon(icon: a.icon, small: true) }
+            if let label = a.label { Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize() }
+            NotchTrailing(trailing: a.trailing).frame(width: a.label != nil ? hudWide : hudSide)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 30)
     }
 
     private func compactRow(_ a: NotchAlert) -> some View {
         HStack(spacing: 0) {
-            if let label = a.label {
+            if notch.ears, let m = notch.music {
+                // Music left of the camera, the other alert right of it.
+                HStack(spacing: 8) {
+                    if musicArt != nil { Color.clear.frame(width: 20, height: 20) } else { NotchIcon(icon: m.icon, small: true) }
+                    NotchTrailing(trailing: m.trailing)
+                }
+                .frame(width: hudWide, alignment: .leading)
+                .padding(.leading, 10)
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    NotchTrailing(trailing: a.trailing)
+                    NotchIcon(icon: a.icon, small: true)
+                }
+                .frame(width: hudWide, alignment: .trailing)
+                .padding(.trailing, 10)
+            } else if let label = a.label {
                 HStack(spacing: 7) {
                     if case .none = a.icon {} else { NotchIcon(icon: a.icon, small: true) }
                     Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(1).fixedSize()
@@ -441,7 +703,11 @@ struct NotchView: View {
                 Spacer(minLength: 0)
                 NotchTrailing(trailing: a.trailing).frame(width: hudWide, alignment: .trailing).padding(.trailing, 10)
             } else {
-                NotchIcon(icon: a.icon, small: true).frame(width: hudSide)
+                Group {
+                    // The song's cover is drawn once by NotchView (it slides).
+                    if Notch.grows(a.id), (a.id == "music" ? musicArt : wkTile) != nil { Color.clear.frame(width: 20, height: 20) } else { NotchIcon(icon: a.icon, small: true) }
+                }
+                .frame(width: hudSide)
                 Spacer(minLength: 0)
                 NotchTrailing(trailing: a.trailing).frame(width: hudSide)
             }
@@ -450,7 +716,18 @@ struct NotchView: View {
     }
 
     @ViewBuilder
-    private func card(_ a: NotchAlert) -> some View {
+    private func card(_ a: NotchAlert, top: CGFloat? = nil) -> some View {
+        if a.id.hasPrefix("wk-"), Notch.grows(a.id) {
+            WaniKaniNotchCard(wk: WaniKani.shared, alert: a, band: notch.size)
+        } else if a.id == "music", let player = notch.player {
+            MusicCard(music: player, band: notch.size)
+        } else {
+            plainCard(a, top: top)
+        }
+    }
+
+    @ViewBuilder
+    private func plainCard(_ a: NotchAlert, top: CGFloat? = nil) -> some View {
         let content = VStack(alignment: .trailing, spacing: 10) {
             cardRow(a)
             if let approve = a.approve {
@@ -458,7 +735,7 @@ struct NotchView: View {
             }
         }
         .padding(.horizontal, 22)
-        .padding(.top, notch.size.height + 4)
+        .padding(.top, top ?? notch.size.height + 4)
         .padding(.bottom, 14)
         // Without Allow / Deny the whole card opens the thing.
         if a.approve == nil {
@@ -484,6 +761,155 @@ struct NotchView: View {
             // The text part opens the thing; Allow / Deny sit beside it, not inside.
             Button { notch.run(a) } label: { row.contentShape(Rectangle()) }.buttonStyle(.plain)
         }
+    }
+}
+
+/// The music card. The band beside the camera holds the cover and levels
+/// (left) and the time (right); below it the title, the lyric line or
+/// artist, the controls and the seek bar. A click on the cover, title or list
+/// button, or anywhere on the card, grows the notch into the whole player.
+private struct MusicCard: View {
+    @ObservedObject var music: Music
+    @ObservedObject private var notch = Notch.shared
+    let band: CGSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                // The cover itself is drawn by NotchView, sliding in from the
+                // small notch; this keeps its place and its click.
+                Color.clear.frame(width: 22, height: 22).tapAction(openDrawer)
+                EqualizerBars(playing: music.isPlaying, live: music.live)
+                Spacer(minLength: band.width + 16)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(MusicDrawer.clock(music.progress(at: context.date) * music.duration) + " / " + MusicDrawer.clock(music.duration))
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            .frame(height: band.height)
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(music.title).font(.system(size: 14, weight: .semibold))
+                    Text(music.lyric.isEmpty ? music.artist : music.lyric).font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .id(music.lyric)
+                        .transition(.opacity)
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .tapAction(openDrawer)
+                // Controls in the middle, under the camera; like (Tide) and
+                // the drawer on the right.
+                Transport(music: music)
+                HStack(spacing: 14) {
+                    if music.isTide {
+                        Button { music.toggleLike() } label: {
+                            Image(systemName: music.liked ? "heart.fill" : "heart").font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(music.liked ? Color.pink : .white.opacity(0.7)).frame(width: 22, height: 30).contentShape(Rectangle())
+                        }
+                        .buttonStyle(WidgetPress())
+                    }
+                    Button(action: openDrawer) {
+                        Image(systemName: "list.bullet").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.7)).frame(width: 22, height: 30).contentShape(Rectangle())
+                    }
+                    .buttonStyle(WidgetPress())
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            if music.duration > 0 { ProgressBar(music: music) }
+            if notch.expanded {
+                MusicDrawer(music: music, bare: true)
+                    .padding(.top, 6)
+                    .transition(.opacity.combined(with: .offset(y: -10)))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 14)
+        // A click anywhere else on the card opens the whole player too.
+        .background(Button(action: openDrawer) { Color.clear.contentShape(Rectangle()) }.buttonStyle(.plain))
+        .animation(.smooth(duration: 0.3), value: music.lyric)
+    }
+
+    private func openDrawer() {
+        withAnimation(.spring(duration: 0.45, bounce: 0.15)) { Notch.shared.expanded.toggle() }
+    }
+
+}
+
+/// WaniKani in the notch (Dock bar): the tile (drawn by NotchView, it
+/// slides) and today's count in the band beside the camera, then what is
+/// waiting with a button to study; a click grows it into the WaniKani panel,
+/// where reviews happen.
+private struct WaniKaniNotchCard: View {
+    @ObservedObject var wk: WaniKani
+    @ObservedObject private var notch = Notch.shared
+    let alert: NotchAlert
+    let band: CGSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Color.clear.frame(width: 22, height: 22)
+                Spacer(minLength: band.width + 16)
+                NotchTrailing(trailing: alert.trailing)
+            }
+            .frame(height: band.height)
+            if notch.expanded {
+                WaniKaniDrawer(wk: wk, bare: true)
+                    .transition(.opacity.combined(with: .offset(y: -10)))
+            } else {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(alert.title).font(.system(size: 14, weight: .semibold))
+                        Text(alert.subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                    }
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(action: grow) {
+                        Text(wk.reviews > 0 ? "Reviews" : "Open").font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 14).padding(.vertical, 6)
+                            .background(Capsule().fill(WK.pink))
+                    }
+                    .buttonStyle(WidgetPress())
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 14)
+        .background(Button(action: grow) { Color.clear.contentShape(Rectangle()) }.buttonStyle(.plain))
+        // Its natural height, for the notch to fit it.
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+            if abs(notch.panelHeight - h) > 0.5 { notch.panelHeight = h }
+        }
+    }
+
+    private func grow() {
+        withAnimation(.spring(duration: 0.45, bounce: 0.15)) { notch.expanded = true }
+    }
+}
+
+/// Previous, play or pause, next: the music card's controls.
+private struct Transport: View {
+    @ObservedObject var music: Music
+
+    var body: some View {
+        HStack(spacing: 16) {
+            button("backward.fill", 15) { music.previous() }
+            button(music.isPlaying ? "pause.fill" : "play.fill", 22) { music.playPause() }
+                .contentTransition(.symbolEffect(.replace))
+            button("forward.fill", 15) { music.next() }
+        }
+        .foregroundStyle(.white)
+    }
+
+    private func button(_ name: String, _ size: CGFloat, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name).font(.system(size: size, weight: .semibold)).frame(width: 24, height: 30).contentShape(Rectangle())
+        }
+        .buttonStyle(WidgetPress())
     }
 }
 
@@ -547,119 +973,29 @@ struct NotchTrailing: View {
     }
 }
 
-/// Cover, title, artist, progress with times, and back / play / next.
-/// The lock screen widget's player.
-struct PlayerRow: View {
-    @ObservedObject var music: Music
-    let cover: CGFloat
-
-    /// Small (the notch): controls sit beside the song instead of below it.
-    private var small: Bool { cover < 50 }
-
-    var body: some View { lockBody }
-
-    private var lockBody: some View {
-        VStack(spacing: small ? 8 : 12) {
-            HStack(spacing: small ? 10 : 12) {
-                Group {
-                    if let art = music.art { Image(nsImage: art).resizable().aspectRatio(contentMode: .fill) }
-                    else { Color.white.opacity(0.08).overlay(Image(systemName: "music.note").foregroundStyle(.white.opacity(0.5))) }
-                }
-                .frame(width: cover, height: cover)
-                .clipShape(RoundedRectangle(cornerRadius: cover * 0.23, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(music.title).font(.system(size: small ? 12.5 : 14, weight: .semibold)).lineLimit(1)
-                    Text(music.artist).font(.system(size: small ? 11 : 12)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if small { controls } else if music.isPlaying { EqualizerBars(playing: true, live: music.live).padding(.trailing, 6) }
-            }
-            if music.duration > 0 {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let p = min(1, max(0, music.scrub ?? music.progress(at: context.date)))
-                    HStack(spacing: 8) {
-                        Text(Self.time(p * music.duration))
-                        GeometryReader { g in
-                            Capsule().fill(.white.opacity(0.2))
-                                .overlay(alignment: .leading) { Capsule().fill(.white.opacity(0.9)).frame(width: g.size.width * p) }
-                        }
-                        .frame(height: small ? 3 : 4)
-                        Text("-" + Self.time((1 - p) * music.duration))
-                    }
-                    .font(.system(size: small ? 9.5 : 10.5, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.55))
-                }
-            }
-            if !small { controls }
-        }
-    }
-
-    private var controls: some View {
-        HStack(spacing: small ? 14 : 34) {
-            Button { music.previous() } label: { Image(systemName: "backward.fill") }
-            Button { music.playPause() } label: { Image(systemName: music.isPlaying ? "pause.fill" : "play.fill").frame(width: small ? 18 : 24) }
-                .font(.system(size: small ? 17 : 22))
-            Button { music.next() } label: { Image(systemName: "forward.fill") }
-        }
-        .font(.system(size: small ? 13 : 17))
-        .buttonStyle(NotchPress())
-    }
-
-    static func time(_ seconds: Double) -> String {
-        guard seconds.isFinite else { return "0:00" }
-        let s = Int(seconds.rounded())
-        return "\(s / 60):" + String(format: "%02d", s % 60)
-    }
-}
-
-/// Dips while pressed, like the wings' widgets.
-struct NotchPress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .contentShape(Rectangle())
-            .scaleEffect(configuration.isPressed ? 0.88 : 1)
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .animation(.spring(duration: 0.2, bounce: 0.4), value: configuration.isPressed)
-    }
-}
-
-/// The player on the lock screen, low and centred above the login, like
-/// Alcove's: a Liquid Glass card.
-struct LockWidget: View {
-    @ObservedObject var music: Music
-    @ObservedObject var notch = Notch.shared
-
-    var body: some View {
-        ZStack {
-            if notch.locked && !music.title.isEmpty && UserDefaults.standard.object(forKey: "lockCard") as? Bool ?? true {
-                PlayerRow(music: music, cover: 56)
-                    .padding(18)
-                    .frame(width: 340)
-                    // Liquid Glass, so it follows the Clear / Tinted setting like the system's own.
-                    .background(GlassBackground(cornerRadius: 26))
-                    // The bright rim Liquid Glass has on the system's own cards.
-                    .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.12), .white.opacity(0.3)],
-                                                     startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
-                    .foregroundStyle(.white)
-                    .transition(.blurIn)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(.spring(duration: 0.36, bounce: 0.1), value: notch.locked)
-    }
-}
-
 /// AppKit's Liquid Glass behind a view. Samples what is behind the window
 /// (SwiftUI's glassEffect only sees this transparent panel and draws grey).
 struct GlassBackground: NSViewRepresentable {
     let cornerRadius: CGFloat
+    /// Fades the glass in and out with AppKit: SwiftUI's opacity doesn't
+    /// reach it, so it would pop in at full strength for a frame.
+    var shown = true
     func makeNSView(context: Context) -> NSGlassEffectView {
         let view = NSGlassEffectView()
         view.cornerRadius = cornerRadius
         view.style = .clear
+        view.alphaValue = shown ? 1 : 0
         return view
     }
-    func updateNSView(_ view: NSGlassEffectView, context: Context) {}
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        view.cornerRadius = cornerRadius
+        let alpha: CGFloat = shown ? 1 : 0
+        guard view.alphaValue != alpha else { return }
+        NSAnimationContext.runAnimationGroup { c in
+            c.duration = 0.3
+            view.animator().alphaValue = alpha
+        }
+    }
 }
 
 /// The AirPods turning over like Alcove's: the pair, the right bud, the

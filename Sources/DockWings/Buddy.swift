@@ -272,8 +272,11 @@ private final class Mascot {
     }
 
     /// May a new plan replace what it is doing? Not mid-climb, mid-air or asleep.
+    /// In a moment with the other buddy: nothing cuts in until then.
+    var busyUntil = Date.distantPast
+
     var interruptible: Bool {
-        guard !state.asleep else { return false }
+        guard !state.asleep, Date() >= busyUntil else { return false }
         switch state.surface {
         case .floor, .window: break
         default: return false
@@ -333,6 +336,8 @@ final class Buddy {
     /// The Dock's icons, in screen x: buddies cross them without stopping,
     /// and clicks there go to the Dock.
     var dockIcons: ClosedRange<CGFloat>?
+    /// Dock bar: where the widgets are (screen x), so nobody sits on them.
+    var widgetSpans: (() -> [ClosedRange<CGFloat>])?
 
     init(music: Music, claude: ClaudeStatus, latest: Latest, batteries: Batteries,
          clipboard: Clipboard, todos: Todos, wanikani: WaniKani) {
@@ -377,7 +382,9 @@ final class Buddy {
             self.attentionUntil = Date().addingTimeInterval(15)
             self.nudge()
         })
-        feeds.append(Notch.shared.$alert.map { $0?.id }.removeDuplicates().sink { [unowned self] id in self.notchAlert(id) })
+        // The playing track lives in the notch with the Dock bar: not an alert
+        // to hang beside for a whole song.
+        feeds.append(Notch.shared.$alert.map { $0?.id == "music" ? nil : $0?.id }.removeDuplicates().sink { [unowned self] id in self.notchAlert(id) })
         watchBanners()
         feeds.append(Drawers.shared.$open.removeDuplicates().debounce(for: .milliseconds(600), scheduler: RunLoop.main)
             .sink { [unowned self] _ in self.drawerOpened() })
@@ -492,7 +499,7 @@ final class Buddy {
             // Somewhere along the floor, not on the Dock's icons.
             m.placed = true
             var x = CGFloat.random(in: w.lane)
-            if let dock = w.dock, dock.contains(x) { x = Bool.random() ? dock.lowerBound - size : dock.upperBound + size }
+            if let z = w.blocked(x) { x = w.clampX(Bool.random() ? z.lowerBound : z.upperBound) }
             m.state.position.x = x
         }
         m.state.position = CGPoint(x: w.clampX(m.state.position.x), y: w.floor)
@@ -523,6 +530,7 @@ final class Buddy {
             w.notchDepth = notch.height
         }
         w.dock = dockIcons.map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
+        w.widgets = (widgetSpans?() ?? []).map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
         w.windows = frontWindow().map { [$0] } ?? []
         if let d = drawerPlatform() { w.windows.append(d) }
         // Windows someone stands on stay platforms even when another window
@@ -587,6 +595,8 @@ final class Buddy {
     /// Once a second: what the Mac is doing.
     private func tick() {
         guard live else { return }
+        // Now and then the two buddies do something together.
+        if Double.random(in: 0..<1) < 0.04 { together() }
         var s = signals
         let any = CGEventType(rawValue: ~0)!
         s.idleSeconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
@@ -595,6 +605,7 @@ final class Buddy {
         s.hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
         let f = panel.frame
         s.claudeX = widgetX?("claude").map { $0 - f.minX }
+        s.batteryX = s.lowBattery ? widgetX?("batteries").map { $0 - f.minX } : nil
         s.attentionX = Date() < attentionUntil ? widgetX?("latest").map { $0 - f.minX } : nil
         signals = s
         // Sleepers wake as soon as the Mac is used.
@@ -732,6 +743,7 @@ final class Buddy {
         if forced == nil {
             if !nearest(s.claudeX) { s.claudeX = nil; if s.claude == .working { s.claude = .none } }
             if !nearest(s.attentionX) { s.attentionX = nil }
+            if !nearest(s.batteryX) { s.batteryX = nil }
         }
         if let until = m.followUntil, until > Date() {
             s.followX = NSEvent.mouseLocation.x - panel.frame.minX
@@ -964,7 +976,8 @@ final class Buddy {
     /// launch are not events.
     private func reactions(music: Music, claude: ClaudeStatus, latest: Latest, batteries: Batteries,
                            clipboard: Clipboard, todos: Todos, wanikani: WaniKani) {
-        let musicX = { [unowned self] in self.widgetX?("music") }
+        // The music widget, or the notch while the track plays there.
+        let musicX = { [unowned self] in self.widgetX?("music") ?? (Notch.shared.music != nil ? Notch.locate()?.rect.midX : nil) }
         feeds.append(music.$trackKey.removeDuplicates().dropFirst().filter { !$0.isEmpty }.sink { [unowned self] _ in
             self.react(.lookUp, near: musicX(), "new song")
         })
@@ -979,7 +992,11 @@ final class Buddy {
             guard !key.isEmpty else { return }
             if key.hasPrefix("hud|") {
                 if key.hasSuffix("Volume") { self.react(.hop(1), near: musicX(), "volume") }
-            } else if !key.hasPrefix("drop|") {
+            } else if let id = key.split(separator: "|").first.map(String.init), Config.bar,
+                      let widget = Notch.widget(for: id), let x = self.widgetX?(widget) {
+                // Dock bar: the alert's widget hops; the buddy nearest it hops along.
+                self.react(.hop(1), near: x, "\(widget) alert")
+            } else if !key.hasPrefix("drop|"), !key.hasPrefix("music|") {
                 self.react(.lookUp, near: Notch.locate()?.rect.midX, "notch alert")
             }
         })
@@ -1006,7 +1023,9 @@ final class Buddy {
         // Every review answer: a hop when right, a flop when wrong, from the
         // buddy nearest the review (taking turns).
         feeds.append(WKReview.shared.$verdict.removeDuplicates().compactMap { $0 }.sink { [unowned self] v in
-            let near = self.drawerPlatform().map { ($0.minX + $0.maxX) / 2 + self.panel.frame.minX } ?? self.widgetX?("wanikani")
+            // The review in the notch (Dock bar), on a drawer, or by the widget.
+            let near = Notch.shared.reviewing ? Notch.locate()?.rect.midX
+                : self.drawerPlatform().map { ($0.minX + $0.maxX) / 2 + self.panel.frame.minX } ?? self.widgetX?("wanikani")
             switch v {
             case .right, .close: self.react(.hop(1), near: near, "a right answer")
             case .wrong: self.react(.flop, near: near, "a wrong answer")
@@ -1060,6 +1079,124 @@ final class Buddy {
     }
 
     // MARK: Moments
+
+    private var lastTogether = Date()
+    private enum Together: CaseIterable { case meet, chase, follow, dance }
+
+    /// A moment for two: they meet and wink, one chases the other, one
+    /// follows the other around, or (with music on) they dance side by
+    /// side. At most every 90 seconds, only when both are free on the floor
+    /// and nothing needs anyone's attention.
+    private func together(_ forcedKind: Together? = nil) {
+        guard mascots.count >= 2, let w = currentWorld() else { return }
+        let a = mascots[0], b = mascots[1]
+        let free = [a, b].allSatisfy { $0.interruptible && $0.state.surface == .floor && !$0.state.asleep && $0.followUntil == nil
+            && !$0.cameo && Date().timeIntervalSince($0.reactedAt) > 8 }
+        guard free || forcedKind != nil else { return }
+        if forcedKind == nil {
+            guard Date().timeIntervalSince(lastTogether) > 90, signals.claude != .waiting, signals.followX == nil,
+                  signals.idleSeconds < 120 else { return }
+        }
+        lastTogether = Date()
+        let kind = forcedKind ?? (signals.musicPlaying && Bool.random() ? .dance : [Together.meet, .chase, .follow].randomElement()!)
+        for m in [a, b] {
+            let p = m.position
+            stop(m)
+            m.state.position = p
+            without { m.holder.position = p }
+            m.reactedAt = Date()
+        }
+        func walk(_ m: Mascot, to x: CGFloat, _ gait: String) -> (steps: [Step], seconds: Double) {
+            let g = m.moves.has(gait) ? gait : "Walk"
+            let speed = max(m.moves.action(g).speed(size: size), size * 0.3)
+            let t = Double(abs(x - m.position.x) / speed)
+            guard t > 0.05 else { return ([], 0) }
+            return ([.face(right: x > m.position.x), .move(g, to: CGPoint(x: x, y: w.floor), seconds: t)], t)
+        }
+        func wait(_ t: Double) -> [Step] { t > 0.05 ? [.play("Stand", seconds: t)] : [] }
+        func greet(_ m: Mascot) -> [Step] {
+            m.moves.extras.contains("Wink") ? [.play("Wink", seconds: max(m.moves.action("Wink").duration, 1))] : Brain.hops(at: m.position, count: 1, world: w, moves: m.moves)
+        }
+        // Two free spots side by side near x (off icons and widgets), left
+        // one first: searched outward from x until both fit.
+        func pair(near x: CGFloat) -> (CGFloat, CGFloat) {
+            let gap = size * 1.1
+            func free(_ c: CGFloat) -> Bool { w.lane.contains(c) && w.blocked(c) == nil }
+            for k in 0...80 {
+                for c in [x - gap / 2 + CGFloat(k) * size * 0.25, x - gap / 2 - CGFloat(k) * size * 0.25] where free(c) && free(c + gap) {
+                    return (c, c + gap)
+                }
+            }
+            let l = Brain.freeSpot(near: x, others: [], world: w)
+            return (l, w.clampX(l + gap))
+        }
+        func play(_ m: Mascot, _ steps: [Step]) {
+            let plan = Brain.offDock(steps, from: m.state, world: w, moves: m.moves) + [.play("Stand", seconds: 0.5)]
+            // Busy for as long as the moment lasts (signal changes would
+            // otherwise make it rethink halfway).
+            let seconds = plan.reduce(0.0) { t, step in
+                switch step {
+                case .play(_, let s), .move(_, _, let s): return t + s
+                case .flight(_, _, let s, _): return t + s
+                default: return t
+                }
+            }
+            m.busyUntil = Date().addingTimeInterval(seconds)
+            run(m, plan)
+        }
+        let (first, second) = a.position.x < b.position.x ? (a, b) : (b, a)
+        switch kind {
+        case .meet, .dance:
+            let (l, r) = pair(near: (first.position.x + second.position.x) / 2)
+            // Far apart: they run to each other instead of a 20-second stroll.
+            func gait(_ m: Mascot, _ x: CGFloat) -> String { abs(x - m.position.x) > size * 4 ? "Run" : "Walk" }
+            let wl = walk(first, to: l, gait(first, l)), wr = walk(second, to: r, gait(second, r))
+            let arrive = max(wl.seconds, wr.seconds)
+            if kind == .meet {
+                BuddyLog.write("\(first.name) and \(second.name) meet")
+                play(first, wl.steps + wait(arrive - wl.seconds) + [.face(right: true)] + greet(first) + [.play("Sit", seconds: 8)])
+                play(second, wr.steps + wait(arrive - wr.seconds) + [.face(right: false)] + greet(second) + [.play("Sit", seconds: 8)])
+            } else {
+                BuddyLog.write("\(first.name) and \(second.name) dance together")
+                func moves(_ m: Mascot, _ p: CGFloat, facing right: Bool) -> [Step] {
+                    let at = CGPoint(x: p, y: w.floor)
+                    var s: [Step] = [.face(right: right)]
+                    for i in 0..<3 {
+                        s += Brain.hops(at: at, count: 1, world: w, moves: m.moves)
+                        s += [.face(right: i % 2 == 0 ? !right : right), .play("Stand", seconds: 0.45)]
+                    }
+                    return s + (m.moves.has("SitAndSpinHead") ? [.play("SitAndSpinHead", seconds: 4.8)] : [])
+                }
+                play(first, wl.steps + wait(arrive - wl.seconds) + moves(first, l, facing: true))
+                play(second, wr.steps + wait(arrive - wr.seconds) + moves(second, r, facing: false))
+            }
+        case .chase:
+            // One runs off a few body-widths, the other runs after it and
+            // catches up; the caught one hops, the chaser sits, pleased.
+            let (chaser, runner) = Bool.random() ? (first, second) : (second, first)
+            let away: CGFloat = runner.position.x >= chaser.position.x ? 1 : -1
+            var goal = Brain.freeSpot(near: w.clampX(runner.position.x + away * size * CGFloat.random(in: 3...5)), others: [], world: w)
+            if (goal - chaser.position.x) * away < size * 1.5 { goal = Brain.freeSpot(near: w.clampX(chaser.position.x - away * size * 4), others: [], world: w) }
+            let dir: CGFloat = goal >= chaser.position.x ? 1 : -1
+            let behind = Brain.freeSpot(near: goal - dir * size * 1.1, others: [goal], world: w)
+            BuddyLog.write("\(chaser.name) chases \(runner.name)")
+            let run1 = walk(runner, to: goal, "Run"), run2 = walk(chaser, to: behind, "Run")
+            let caught = max(run1.seconds, run2.seconds + 0.4)
+            play(runner, run1.steps + wait(caught - run1.seconds) + [.face(right: behind > goal)]
+                 + Brain.hops(at: CGPoint(x: goal, y: w.floor), count: 2, world: w, moves: runner.moves) + [.play("Sit", seconds: 5)])
+            play(chaser, wait(0.4) + run2.steps + [.face(right: goal > behind), .play("Sit", seconds: 6)])
+        case .follow:
+            // The leader strolls somewhere; the other tags along a step behind.
+            let (leader, tagger) = Bool.random() ? (first, second) : (second, first)
+            let goal = Brain.freeSpot(near: w.clampX(CGFloat.random(in: w.lane)), others: [], world: w)
+            let dir: CGFloat = goal >= leader.position.x ? 1 : -1
+            let behind = Brain.freeSpot(near: goal - dir * size * 1.1, others: [goal], world: w)
+            BuddyLog.write("\(tagger.name) follows \(leader.name)")
+            let lw = walk(leader, to: goal, "Walk"), tw = walk(tagger, to: behind, "Walk")
+            play(leader, lw.steps + wait(max(0, tw.seconds + 0.8 - lw.seconds)) + [.face(right: behind > goal), .play("Stand", seconds: 1)] + greet(leader))
+            play(tagger, wait(0.8) + tw.steps + [.face(right: goal > behind), .play("Stand", seconds: 1)] + greet(tagger))
+        }
+    }
 
     private func cheer() {
         guard let w = currentWorld() else { return }
@@ -1552,6 +1689,10 @@ final class Buddy {
         at("notch alert hang", 4) { [unowned self] in self.notchAlert("test-alert") }
         at("notch alert ends", 4) { [unowned self] in self.notchAlert(nil) }
         if mascots.count > 1 {
+            at("together meet", 16) { [unowned self] in self.forced = Signals(); self.together(.meet) }
+            at("together chase", 14) { [unowned self] in self.forced = Signals(); self.together(.chase) }
+            at("together follow", 18) { [unowned self] in self.forced = Signals(); self.together(.follow) }
+            at("together dance", 14) { [unowned self] in self.forced = Signals(); self.together(.dance) }
             at("meeting", 10) { [unowned self] in
                 self.forced = Signals()
                 plan(go(self.mascots[1].position.x + self.size * 1.2, "Walk"))

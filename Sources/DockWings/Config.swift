@@ -2,9 +2,12 @@
 // -Demo a`) or `defaults write local.dockwings Demo a`.
 //   Demo:     a | b — fake music/todo/shelf states for screenshots; touches
 //             no real player or Reminders
-//             notch — a loop of notch alerts; lock — the lock screen widget
-//             on the desktop
+//             notch — a loop of notch alerts
 //   Backdrop: path to an image shown behind the panels (wallpaper test)
+//   Bar:      YES — the wings sit inside the Dock, over runs of spacer tiles
+//             after Finder and before Trash (the Dock needs both)
+//   NotchStyle: island — alerts in a glass pill below the notch; card — the
+//             compact alert stays black, the card is glass below the notch
 //   Open:     widget id whose drawer opens 1 s after launch (screenshot aid)
 //   Review:   with Demo, an answer given to the first WaniKani review question
 //             when the review starts
@@ -15,6 +18,8 @@ import SwiftUI
 enum Config {
     static let demo = UserDefaults.standard.string(forKey: "Demo")
     static let backdrop = UserDefaults.standard.string(forKey: "Backdrop")
+    static let bar = UserDefaults.standard.bool(forKey: "Bar")
+    static let notchStyle = UserDefaults.standard.string(forKey: "NotchStyle")
 }
 
 extension EnvironmentValues {

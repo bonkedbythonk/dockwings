@@ -32,13 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var drawerPanel: StripPanel!
     private var notchPanel: StripPanel!
     /// The player widget on the lock screen; empty (and click-through) while unlocked.
-    private var lockPanel: StripPanel!
     private var buddy: Buddy!
     private var backdrop: NSWindow?
     private var watchers: [AnyCancellable] = []
     private let windows = Windows()
 
     private var dragCount = NSPasteboard(name: .drag).changeCount
+
+    /// Dock bar: apps dragged in among the spacers (screen x).
+    private var barHoles: [ClosedRange<CGFloat>] = []
 
     /// Space between the Dock and a panel.
     private let gap: CGFloat = 12
@@ -96,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }, NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [unowned self] event in
             // Two-finger tap on the music widget plays or pauses (instead of the wing's menu).
             MainActor.assumeIsolated {
-                guard music.hovering, musicPanel.frame.contains(NSEvent.mouseLocation) else { return event }
+                guard music.hovering, musicPanel.frame.contains(NSEvent.mouseLocation) || Notch.shared.showsCard else { return event }
                 music.playPause()
                 return nil
             }
@@ -109,8 +111,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return nil
         }
+        buddy.widgetSpans = { [unowned self] in
+            guard Config.bar else { return [] }
+            return barHoles + [(Side.left, pointer.left, musicPanel!), (.right, pointer.right, todoPanel!)].flatMap { side, wing, panel in
+                wing.frames.filter { plan.side(of: $0.key) == side }.map { (panel.frame.minX + $0.value.minX)...(panel.frame.minX + $0.value.maxX) }
+            }
+        }
         notchPanel = StripPanel(NotchView())
-        lockPanel = StripPanel(LockWidget(music: music))
         // Above the menu bar (24), so the ears draw over it.
         notchPanel.level = .statusBar
         // Moves over the notch reach the app's own monitor even while the
@@ -126,15 +133,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         placeNotch()
         if Config.demo == "notch" { Notch.shared.runDemo() }
-        // Test aid: the lock screen widget on the desktop, without locking.
-        if Config.demo == "lock" { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Notch.shared.locked = true } }
         MediaKeys.start()
         downloads.start()
-        LockScreen.attach([notchPanel, lockPanel]) { [unowned self] locked in
+        DockSpacers.start()
+        LockScreen.attach([notchPanel]) { locked in
             Notch.shared.locked = locked
-            lockPanel.passThrough = !locked
         }
         Notch.shared.watch(claude: claude, batteries: batteries)
+        Notch.shared.watch(music: music)
         Notch.shared.onDrop = { [unowned self] urls in
             shelf.add(urls)
             Notch.shared.dragging = false
@@ -147,10 +153,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [unowned self] _ in
             MainActor.assumeIsolated {
                 if Drawers.shared.open != nil { Drawers.shared.open = nil }
+                if Notch.shared.expanded { withAnimation(.spring(duration: 0.4, bounce: 0.1)) { Notch.shared.expanded = false } }
                 self.watchDragWhilePressed()
             }
         }
         Drawers.shared.locate = { [unowned self] id in self.drawerAnchor(id) }
+        // The grown music player in the notch takes typing (its search field).
+        watchers.append(Notch.shared.$expanded.receive(on: RunLoop.main).sink { [unowned self] on in
+            if on { self.notchPanel.makeKey() }
+        })
         watchers.append(Drawers.shared.$open.receive(on: RunLoop.main).sink { [unowned self] _ in
             self.updateClicks()
         })
@@ -225,11 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let size = Notch.windowSize
         if Notch.shared.size != rect.size { Notch.shared.size = rect.size }
         notchPanel.setRegion(NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height, width: size.width, height: size.height))
-        // Lock screen player: centred, low, just above the login (name and
-        // password sit in the bottom ~150 pt).
-        if let screen = Notch.locate()?.screen {
-            lockPanel.setRegion(NSRect(x: rect.midX - 200, y: screen.frame.minY + 150, width: 400, height: 200))
-        }
     }
 
     /// Hover over the notch shape shows the alert's card; only then does the
@@ -241,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A file drag gets a wider catch area, so the notch is easy to hit;
         // an open widget a little slack before it closes.
         let margin: CGFloat = Notch.shared.dragging ? -40 : Notch.shared.hovering ? -12 : -2
-        let inArea = notchPanel.alphaValue > 0 && !Notch.shared.locked && shape.insetBy(dx: margin, dy: margin).contains(mouse)
+        let inArea = notchPanel.alphaValue > 0 && (!Notch.shared.locked || Notch.shared.alert?.id == "music") && shape.insetBy(dx: margin, dy: margin).contains(mouse)
         notchCatch = inArea ? shape.insetBy(dx: margin, dy: margin) : .zero
         let over = inArea && Notch.shared.alert != nil && !Notch.shared.fullScreen
         if over != Notch.shared.hovering { Notch.shared.hovering = over }
@@ -273,17 +279,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func notchGesture(_ event: NSEvent) -> Bool {
         if event.momentumPhase != [] { return notchAxisVertical != nil }
         guard notchCatch.contains(NSEvent.mouseLocation) || notchAxisVertical != nil else { return false }
+        // The grown music player scrolls its lyrics and queue: no notch swipes there.
+        if Notch.shared.expanded { notchAxisVertical = nil; return false }
         let dy = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY  // + = fingers up
+        // Over the music card sideways swipes seek and skip (swipe(_:)), so
+        // it sees every phase too; this one keeps the vertical swipes.
+        let musicCard = Notch.shared.showsCard && Notch.shared.alert?.id == "music"
         switch event.phase {
         case .began:
             notchAxisVertical = nil
             notchDistance = 0
             notchFlipped = false
+            if musicCard { return false }
         case .changed:
             if notchAxisVertical == nil, abs(event.scrollingDeltaX) + abs(event.scrollingDeltaY) > 2 {
                 notchAxisVertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
             }
-            guard notchAxisVertical == true else { return notchAxisVertical == false }
+            guard notchAxisVertical == true else { return notchAxisVertical == false && !musicCard }
             notchDistance += dy
             if !notchFlipped, abs(notchDistance) > 30 {
                 notchFlipped = true
@@ -293,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case .ended, .cancelled:
             notchAxisVertical = nil
+            if musicCard { return false }
         default:
             return false
         }
@@ -333,7 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Presence.shared.replay()
             DispatchQueue.main.async { self.updateClicks() }
         }
-        buddy.dockIcons = dock.rect.minX...dock.rect.maxX
+        // Buddies keep off the app icons. With the Dock bar that is only the
+        // apps between the spacer runs: the widget parts are theirs to walk.
+        let sides = Config.bar ? DockGeometry.spacerSides() : nil
+        let apps = sides.map { $0.left.maxX...max($0.left.maxX, $0.right.minX) }
+        buddy.dockIcons = apps ?? dock.rect.minX...dock.rect.maxX
+        // Apps dragged in among the spacers: also not to be stood on.
+        barHoles = sides.map { ($0.leftHoles + $0.rightHoles).map { $0.minX...$0.maxX } } ?? []
         buddy.place(on: dock.screen)
         // Magnification grows the Dock under the mouse; hold still meanwhile.
         if dock.rect.insetBy(dx: 0, dy: -60).contains(NSEvent.mouseLocation), musicPanel.isVisible { return }
@@ -346,14 +365,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bottom = dock.screen.frame.minY + 5
         let d = NSRect(x: list.minX, y: bottom, width: list.width, height: dock.screen.visibleFrame.minY - bottom)
         let screen = dock.screen.frame
-        let leftWidth = d.minX - screen.minX - 2 * gap
-        let rightWidth = screen.maxX - d.maxX - 2 * gap
         // Room above the Dock box for magnified widgets to grow into.
         pointer.update(box: d)
         let height = d.height + pointer.headroom
-        plan.setSpace(left: leftWidth, right: rightWidth)
-        let leftRegion = NSRect(x: d.minX - gap - leftWidth, y: d.minY, width: leftWidth, height: height)
-        let rightRegion = NSRect(x: d.maxX + gap, y: d.minY, width: rightWidth, height: height)
+        // Bar mode: the Dock is stretched with spacer tiles and the wings sit
+        // inside it, over the spacers. Otherwise they sit beside the Dock.
+        let leftRegion: NSRect, rightRegion: NSRect
+        var holes: [Side: [ClosedRange<CGFloat>]] = [:]
+        if let gaps = sides {
+            leftRegion = NSRect(x: gaps.left.minX, y: d.minY, width: gaps.left.width, height: height)
+            rightRegion = NSRect(x: gaps.right.minX, y: d.minY, width: gaps.right.width, height: height)
+            holes[.left] = gaps.leftHoles.map { ($0.minX - leftRegion.minX)...($0.maxX - leftRegion.minX) }
+            holes[.right] = gaps.rightHoles.map { ($0.minX - rightRegion.minX)...($0.maxX - rightRegion.minX) }
+        } else {
+            let leftWidth = d.minX - screen.minX - 2 * gap
+            let rightWidth = screen.maxX - d.maxX - 2 * gap
+            leftRegion = NSRect(x: d.minX - gap - leftWidth, y: d.minY, width: leftWidth, height: height)
+            rightRegion = NSRect(x: d.maxX + gap, y: d.minY, width: rightWidth, height: height)
+        }
+        plan.setSpace(left: leftRegion.width, right: rightRegion.width, holes: holes)
         musicPanel.setRegion(leftRegion)
         todoPanel.setRegion(rightRegion)
         // Each widget's own area too: one wing can sit over light and dark at once.
@@ -375,7 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateClicks() {
         // Wings sit in the space the Dock reserves, so they may always take clicks.
         musicPanel.passThrough = false
-        todoPanel.passThrough = Presence.shared.screenshotThumbnail
+        todoPanel.passThrough = Presence.shared.screenshotThumbnail && !Config.bar
         updateDrawerClicks()
         if Drawers.shared.open != nil { drawerPanel.makeKey() }
     }
@@ -416,7 +446,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Over the open music drawer, sideways swipes seek and skip like in
         // Tide; up and down still scroll its lyrics and queue.
         let inDrawer = Drawers.shared.open == "music" && !drawerPanel.passThrough
-        guard side != nil || inDrawer || swipeAxisVertical != nil else { return false }
+        // The notch's music card (Dock bar) seeks and skips like the widget.
+        let inNotchCard = Notch.shared.showsCard && Notch.shared.alert?.id == "music" && notchPanel.frame.contains(mouse)
+        guard side != nil || inDrawer || inNotchCard || swipeAxisVertical != nil else { return false }
         let musicSwipe = music.hovering || inDrawer
         // In the drawer the lyrics and queue scroll; above and below them
         // (search field, button row) up and down sets the volume, as on
@@ -532,8 +564,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func trackPointer() {
         let mouse = NSEvent.mouseLocation
         buddy.track(mouse)
-        // Music shows its controls while the pointer is over it, on either side.
-        let hovering = [(pointer.left, musicPanel!), (pointer.right, todoPanel!)].contains { wing, panel in
+        // Music shows its controls while the pointer is over it, on either
+        // side, or over the notch's music card (Dock bar).
+        let notchCard = Notch.shared.showsCard && Notch.shared.alert?.id == "music"
+        let hovering = notchCard || plan.side(of: "music") != nil && [(pointer.left, musicPanel!), (pointer.right, todoPanel!)].contains { wing, panel in
             guard let f = wing.frames["music"], panel.frame.contains(mouse) else { return false }
             let x = mouse.x - panel.frame.minX
             return x > f.minX - 30 && x < f.maxX + 30
