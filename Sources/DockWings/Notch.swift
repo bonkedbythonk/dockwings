@@ -32,6 +32,9 @@ struct NotchAlert {
     var duration: TimeInterval = 3
     /// Needs you: opens as the card for a few seconds, then stays compact.
     var opensCard = false
+    /// No card: a click on the notch runs the action at once (the WaniKani
+    /// tile, whose drawer grows out of the notch like the Dynamic Island).
+    var tapOpens = false
     /// Shows at once, ahead of whatever is on screen (the volume HUD).
     var jumpsQueue = false
     /// A word beside the icon in the one-line state (the HUD: "Sound").
@@ -90,7 +93,7 @@ final class Notch: ObservableObject {
     /// it by itself. During a file drag the drop card is open from the start,
     /// reaching well below the screen edge (dragging up to the very top opens
     /// Mission Control).
-    var showsCard: Bool { alert != nil && alert?.id != "hud" && (cardShown || (hovering && !clicked) || (dragging && alert?.id == "drop")) }
+    var showsCard: Bool { alert != nil && alert?.id != "hud" && alert?.tapOpens != true && (cardShown || (hovering && !clicked) || (dragging && alert?.id == "drop")) }
     /// How wide the black shape is drawn now (same sizes as NotchView), so
     /// buddies can keep clear of it.
     var shapeWidth: CGFloat {
@@ -417,7 +420,16 @@ struct NotchView: View {
         .foregroundStyle(.white)
     }
 
+    @ViewBuilder
     private func compact(_ a: NotchAlert) -> some View {
+        if a.tapOpens {
+            Button { notch.run(a) } label: { compactRow(a).contentShape(Rectangle()) }.buttonStyle(.plain)
+        } else {
+            compactRow(a)
+        }
+    }
+
+    private func compactRow(_ a: NotchAlert) -> some View {
         HStack(spacing: 0) {
             if let label = a.label {
                 HStack(spacing: 7) {

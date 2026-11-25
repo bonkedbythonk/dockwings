@@ -12,7 +12,7 @@
 // notch shows a WaniKani tile and today's lessons (also over a full-screen
 // browser; until none are left, or 20 minutes without a new one). Reviews in
 // the drawer show the tile with their progress the same way. Meanwhile the
-// wing leaves the widget out; the notch's card opens the drawer.
+// wing leaves the widget out; a click on the notch opens the drawer.
 import AppKit
 import Security
 import SwiftUI
@@ -100,7 +100,7 @@ final class WaniKani: ObservableObject {
         reviewsShown = count
         Notch.shared.post(NotchAlert(id: "wk-reviews", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
                                      title: "WaniKani reviews", subtitle: "\(total - done) left", duration: 0,
-                                     action: { Drawers.shared.toggle("wanikani") }))
+                                     tapOpens: true, action: { Drawers.shared.toggle("wanikani") }))
     }
     @Published private(set) var reviewTile = WKReviewTile(characters: nil, type: "", progress: 0)
     func setReviewTile(_ tile: WKReviewTile) { if reviewTile != tile { reviewTile = tile } }
@@ -282,7 +282,7 @@ final class WaniKani: ObservableObject {
         lessonsShown = count
         Notch.shared.post(NotchAlert(id: "wk-lessons", icon: .image(Self.tile), trailing: .text(count, .white.opacity(0.7)),
                                      title: "WaniKani lessons", subtitle: lessonsLeft > 0 ? "\(lessonsLeft) left today" : "\(lessons) available", duration: 0,
-                                     action: { Drawers.shared.toggle("wanikani") }))
+                                     tapOpens: true, action: { Drawers.shared.toggle("wanikani") }))
     }
 
     /// The widget's pink tile with 鰐, for the notch.

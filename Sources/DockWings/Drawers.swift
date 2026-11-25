@@ -100,18 +100,35 @@ struct DrawerHost: View {
 private struct Island: ViewModifier {
     let shown: Bool
     func body(content: Content) -> some View {
-        let n = Notch.shared.size
         content
             .blur(radius: shown ? 0 : 6)
             .opacity(shown ? 1 : 0)
             // The pill is the card's own colour (no black box), there only
             // while the content isn't.
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(white: 0.09).opacity(shown ? 0 : 0.88)))
-            .mask(alignment: .top) {
-                RoundedRectangle(cornerRadius: shown ? 18 : n.height / 2, style: .continuous)
-                    .frame(width: shown ? nil : n.width, height: shown ? nil : n.height)
-            }
+            .background(Color(white: 0.09).opacity(shown ? 0 : 0.88))
+            .clipShape(IslandShape(progress: shown ? 1 : 0, start: Notch.shared.size))
             .offset(y: shown ? 0 : -8)
+    }
+}
+
+/// A rounded rect growing from a notch-sized pill at the top centre to the
+/// full frame. Animates through `progress`, so every frame is in between.
+private struct IslandShape: Shape {
+    var progress: CGFloat
+    let start: CGSize
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in r: CGRect) -> Path {
+        let p = max(0, progress)
+        let w = start.width + (r.width - start.width) * p
+        let h = start.height + (r.height - start.height) * p
+        let radius = start.height / 2 + (18 - start.height / 2) * min(p, 1)
+        return Path(roundedRect: CGRect(x: r.midX - w / 2, y: r.minY, width: w, height: max(h, 0)),
+                    cornerRadius: max(radius, 0), style: .continuous)
     }
 }
 
