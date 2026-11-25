@@ -89,9 +89,10 @@ final class WaniKani: ObservableObject {
     }
 
     /// The notch during a review in the drawer: the tile left of the camera,
-    /// reviews done right of it; gone once the batch is through.
-    func showReviews(done: Int, of total: Int) {
-        guard reviewing, total > 0, done < total else {
+    /// reviews done right of it; gone once the finished screen shows (the
+    /// last right answer still waits for Return).
+    func showReviews(done: Int, of total: Int, over: Bool) {
+        guard reviewing, total > 0, !over else {
             if reviewsShown != nil { reviewsShown = nil; Notch.shared.clear("wk-reviews") }
             return
         }
