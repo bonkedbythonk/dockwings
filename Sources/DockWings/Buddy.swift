@@ -336,6 +336,12 @@ final class Buddy {
     /// The Dock's icons, in screen x: buddies cross them without stopping,
     /// and clicks there go to the Dock.
     var dockIcons: ClosedRange<CGFloat>?
+    /// The grown notch panel (music player, WaniKani review), screen rect,
+    /// while it is open: a buddy sits on its bottom edge.
+    var notchPanelRect: (() -> NSRect?)?
+    /// Until then a buddy is on its way to the notch panel's edge: the
+    /// buddies' window stays above the notch so it shows.
+    private var seatingUntil = Date.distantPast
     /// Dock bar: where the widgets are (screen x), so nobody sits on them.
     var widgetSpans: (() -> [ClosedRange<CGFloat>])?
 
@@ -388,6 +394,8 @@ final class Buddy {
         watchBanners()
         feeds.append(Drawers.shared.$open.removeDuplicates().debounce(for: .milliseconds(600), scheduler: RunLoop.main)
             .sink { [unowned self] _ in self.drawerOpened() })
+        feeds.append(Notch.shared.$expanded.removeDuplicates().debounce(for: .milliseconds(600), scheduler: RunLoop.main)
+            .sink { [unowned self] open in if open { self.notchSeat() } })
         // The notch widening or the pointer over it; read once the change has landed.
         feeds.append(Publishers.CombineLatest3(Notch.shared.$alert.map { $0?.id }, Notch.shared.$hovering, Notch.shared.$cardShown)
             .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
@@ -533,6 +541,7 @@ final class Buddy {
         w.widgets = (widgetSpans?() ?? []).map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
         w.windows = frontWindow().map { [$0] } ?? []
         if let d = drawerPlatform() { w.windows.append(d) }
+        if let n = notchPlatform() { w.windows.append(n) }
         // Windows someone stands on stay platforms even when another window
         // or app comes to the front.
         for m in mascots {
@@ -580,6 +589,7 @@ final class Buddy {
     /// A window's top edge by window number, while it is on screen.
     private func platform(of id: Int) -> Platform? {
         if id == Self.drawerID { return drawerPlatform() }
+        if id == Self.notchID { return notchPlatform() }
         guard let screen,
               let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(id)) as? [[String: Any]])?.first,
               info[kCGWindowIsOnscreen as String] as? Bool == true,
@@ -595,6 +605,11 @@ final class Buddy {
     /// Once a second: what the Mac is doing.
     private func tick() {
         guard live else { return }
+        // Above the notch while someone sits on (or heads for) its panel,
+        // else at the wings' level, under the drawers.
+        let onNotch = Date() < seatingUntil || mascots.contains { $0.state.surface == .window(Self.notchID) }
+        let level = NSWindow.Level(rawValue: onNotch ? 26 : 23)
+        if panel.level != level { panel.level = level; if !onNotch, let d = drawerWindow { order(below: d) } }
         // Now and then the two buddies do something together.
         if Double.random(in: 0..<1) < 0.04 { together() }
         var s = signals
@@ -676,6 +691,43 @@ final class Buddy {
         let f = panel.frame
         return Platform(id: Self.drawerID, minX: win.frame.minX + d.frame.minX - f.minX, maxX: win.frame.minX + d.frame.maxX - f.minX,
                         y: win.frame.maxY - d.frame.minY - f.minY)
+    }
+
+    /// The grown notch panel's bottom edge, as a ledge to sit on.
+    static let notchID = -2
+    private func notchPlatform() -> Platform? {
+        guard let r = notchPanelRect?(), r.width >= 120 else { return nil }
+        let f = panel.frame
+        return Platform(id: Self.notchID, minX: r.minX - f.minX + size * 0.3, maxX: r.maxX - f.minX - size * 0.3, y: r.minY - f.minY)
+    }
+
+    /// The notch grew into the music player or WaniKani: a buddy climbs out
+    /// of the notch (or from beside it), along under the menu bar, and drops
+    /// onto the panel's bottom edge to sit with its legs dangling, near the
+    /// right corner. It reacts from there and falls off when it closes.
+    private func notchSeat() {
+        guard live, let w = currentWorld(), let ledge = w.platform(Self.notchID), let n = w.notch,
+              !mascots.contains(where: { $0.state.surface == .window(Self.notchID) }) else { return }
+        let ready = mascots.filter { ($0.interruptible || $0.cameo) && $0.moves.has("ClimbCeiling") }
+        guard let m = ready.first(where: \.cameo) ?? ready.randomElement() else { return }
+        BuddyLog.write("\(m.name) climbs onto the notch panel")
+        stop(m)
+        seatingUntil = Date().addingTimeInterval(5)
+        panel.level = NSWindow.Level(rawValue: 26)
+        // Hanging beside the notch already: from there; else out of the notch itself.
+        if !(m.cameo && m.state.surface == .ceiling) {
+            m.state.surface = .ceiling
+            m.state.position = CGPoint(x: n.upperBound - size * 0.5, y: w.ceiling - w.notchDepth + size)
+            without { m.holder.position = m.state.position }
+            flip(m)
+        }
+        m.cameo = false
+        let out = CGPoint(x: w.clampX(ledge.maxX + size * 0.9), y: w.ceiling)
+        let seat = CGPoint(x: ledge.maxX - size * 0.4, y: ledge.y)
+        let sit = m.moves.has("SitAndDangleLegs") ? "SitAndDangleLegs" : "Sit"
+        run(m, [.face(right: true), .move("ClimbCeiling", to: out, seconds: 0.7), .play("GrabCeiling", seconds: 0.5)]
+            + Brain.jump(from: out, to: seat, lift: 0, world: w, moves: m.moves)
+            + [.face(right: false), .play(sit, seconds: 600)])
     }
 
     /// A widget's drawer opened: the nearest buddy on the floor jumps onto it
@@ -1065,8 +1117,8 @@ final class Buddy {
             if m.moves.has("Tripping") { steps.append(.play("Tripping", seconds: m.moves.action("Tripping").duration)) }
             steps += [.play(m.moves.has("Sprawl") ? "Sprawl" : "Sit", seconds: 2.5), .play("Stand", seconds: 0.6)]
         }
-        // On a drawer: back to sitting on its edge afterwards.
-        if m.state.surface == .window(Self.drawerID) {
+        // On a drawer or the notch panel: back to sitting on its edge afterwards.
+        if m.state.surface == .window(Self.drawerID) || m.state.surface == .window(Self.notchID) {
             steps.append(.play(m.moves.has("SitAndDangleLegs") ? "SitAndDangleLegs" : "Sit", seconds: 600))
         }
         run(m, Brain.spaced(Brain.offDock(steps, from: m.state, world: w, moves: m.moves), from: m.state,

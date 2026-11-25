@@ -1013,12 +1013,16 @@ private struct LyricsView: View {
                                 .id(index)
                             }
                         }
-                        .padding(.vertical, 90)
+                        // Little room above the first line (it used to start a
+                        // third of the way down); the current line sits near
+                        // the top third, more of what comes next below it.
+                        .padding(.top, 24)
+                        .padding(.bottom, 120)
                     }
                     .onChange(of: current) { _, line in
-                        withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(max(line, 0), anchor: .center) }
+                        withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(max(line, 0), anchor: UnitPoint(x: 0.5, y: 0.3)) }
                     }
-                    .onAppear { proxy.scrollTo(max(current, 0), anchor: .center) }
+                    .onAppear { proxy.scrollTo(max(current, 0), anchor: UnitPoint(x: 0.5, y: 0.3)) }
                     .animation(.smooth(duration: 0.3), value: current)
                 }
             }

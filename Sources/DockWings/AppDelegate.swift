@@ -111,6 +111,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return nil
         }
+        buddy.notchPanelRect = { [unowned self] in
+            guard Notch.shared.expanded, Notch.shared.showsCard else { return nil }
+            let f = Notch.shared.frame, p = notchPanel.frame
+            return NSRect(x: p.minX + f.minX, y: p.maxY - f.maxY, width: f.width, height: f.height)
+        }
         buddy.widgetSpans = { [unowned self] in
             guard Config.bar else { return [] }
             return barHoles + [(Side.left, pointer.left, musicPanel!), (.right, pointer.right, todoPanel!)].flatMap { side, wing, panel in
