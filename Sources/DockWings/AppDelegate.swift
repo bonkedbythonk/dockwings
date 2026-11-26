@@ -219,6 +219,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { self.awake = on; self.updateVisible(); if on { self.followDock() } }
             }
         }
+        // Widgets fill in over the first second or two (music state, weather,
+        // batteries) and would reshuffle; stay hidden meanwhile, then rise once.
+        Presence.shared.shown = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { Presence.shared.replay() }
         layout()
         followDock()
         updateClicks()
