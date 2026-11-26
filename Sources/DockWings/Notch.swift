@@ -149,19 +149,20 @@ final class Notch: ObservableObject {
     static var hudOn: Bool { UserDefaults.standard.object(forKey: "notchHUD") as? Bool ?? true }
 
     /// A full-screen app is in front: only the volume and brightness HUD shows.
-    /// WaniKani steps aside over a full-screen app (a video) and comes back after.
+    /// Music and WaniKani step aside over a full-screen app (a video) and come back after.
     @Published var fullScreen = false {
         didSet {
             guard fullScreen != oldValue else { return }
             guard fullScreen else { let back = parked; parked = []; back.forEach(post); return }
             let all = [alert].compactMap { $0 } + queue
-            let wk = all.filter { $0.id.hasPrefix("wk-") && $0.id != "wk-open" }
-            if alert?.id.hasPrefix("wk-") == true, expanded { expanded = false }
+            let wk = all.filter { Self.parks($0.id) }
+            if expanded { expanded = false }
             for id in all.map(\.id) where !Self.fullScreenOK(id) { forceClear(id) }
             parked = wk
         }
     }
     private var parked: [NotchAlert] = []
+    private static func parks(_ id: String) -> Bool { id == "music" || (id.hasPrefix("wk-") && id != "wk-open") }
 
     /// The screen is locked: the notch sits on the lock screen and shows
     /// only the HUD and charging, nothing private.
@@ -177,11 +178,10 @@ final class Notch: ObservableObject {
     /// Music too: like the system's own lock screen player (Dock bar only posts it).
     static let lockSafe: Set<String> = ["hud", "power", "music"]
     /// Shown over a full-screen app too. With the Dock bar the Dock's widgets
-    /// are hidden there, so the notch also keeps the music and a Claude chat
-    /// that needs you.
+    /// are hidden there, so the notch also keeps a Claude chat that needs you.
     static func fullScreenOK(_ id: String) -> Bool {
         id == "hud"
-            || (Config.bar && (id == "music" || (id.hasPrefix("claude-") && !id.hasPrefix("claude-done"))))
+            || (Config.bar && id.hasPrefix("claude-") && !id.hasPrefix("claude-done"))
     }
     var lockChanged: ((Bool) -> Void)?
 
@@ -194,7 +194,7 @@ final class Notch: ObservableObject {
     /// back compact afterwards.
     func post(_ a: NotchAlert) {
         if locked && !Self.lockSafe.contains(a.id) { return }
-        if fullScreen, a.id.hasPrefix("wk-") { parked.removeAll { $0.id == a.id }; parked.append(a); return }
+        if fullScreen, Self.parks(a.id) { parked.removeAll { $0.id == a.id }; parked.append(a); return }
         if a.id != "hud" && ((fullScreen && !Self.fullScreenOK(a.id)) || !Self.alertsOn) { return }
         var a = a
         a.posted = Date()
@@ -294,7 +294,7 @@ final class Notch: ObservableObject {
     @Published var panelHeight: CGFloat = 0
     /// Another one-line alert while music plays: they share the notch, the
     /// track left of the camera and the alert right of it.
-    var ears: Bool { music != nil && alert.map { $0.id != "music" && $0.label == nil } == true }
+    var ears: Bool { music != nil && !fullScreen && alert.map { $0.id != "music" && $0.label == nil } == true }
 
     /// Dock bar: the playing track lives in the notch (cover left of the
     /// camera, live levels right; hover for the card, click opens the
@@ -314,7 +314,7 @@ final class Notch: ObservableObject {
                                    trailing: .bars(music.live), title: title, subtitle: artist, duration: 0,
                                    action: { music.openPlayer() })
                 self.music = a
-                if let current = alert, current.id != "music" {
+                if let current = alert, current.id != "music", !fullScreen {
                     queue.removeAll { $0.id == "music" }
                     queue.append(a)
                 } else {
