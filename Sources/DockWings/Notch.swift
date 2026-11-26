@@ -75,10 +75,11 @@ final class Notch: ObservableObject {
     /// The pointer is over the shape.
     @Published var hovering = false {
         didSet {
-            // A review in the grown WaniKani panel stays open when the pointer
-            // leaves (typing answers shouldn't need it up here); a click
+            // Leaving closes the card and the grown player, however they
+            // were opened. A review in the grown WaniKani panel stays open
+            // (typing answers shouldn't need the pointer up here); a click
             // elsewhere still closes it.
-            if !hovering { clicked = false; if !reviewing { expanded = false } }
+            if !hovering { clicked = false; cardShown = false; if !reviewing { expanded = false } }
             if !hovering, let id = finishWhenLeft { finishWhenLeft = nil; clear(id) }
         }
     }
@@ -107,9 +108,11 @@ final class Notch: ObservableObject {
 
     static let windowSize = CGSize(width: 480, height: 640)
 
-    /// Swipe down on the notch: the alert's card.
+    /// Swipe down on the notch: music and WaniKani grow into the big
+    /// player or panel; other alerts show their card.
     func swipeDown() {
-        if alert != nil, !cardShown { cardShown = true }
+        guard alert != nil else { return }
+        if Self.grows(alert?.id) { expanded = true } else if !cardShown { cardShown = true }
     }
 
     /// Swipe up: closes the card, else sends the alert away.

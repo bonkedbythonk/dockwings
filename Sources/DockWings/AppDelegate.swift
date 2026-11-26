@@ -307,13 +307,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notchDistance: CGFloat = 0
     private var notchFlipped = false
 
-    /// Two-finger swipe over the notch: down opens the alert's card, up
-    /// closes it or sends the alert away. One action per swipe.
+    /// Two-finger swipe over the notch: down opens the alert's card (music
+    /// and WaniKani: the grown player), up closes it or sends the alert
+    /// away. One action per swipe.
     private func notchGesture(_ event: NSEvent) -> Bool {
         if event.momentumPhase != [] { return notchAxisVertical != nil }
         guard notchCatch.contains(NSEvent.mouseLocation) || notchAxisVertical != nil else { return false }
-        // The grown music player scrolls its lyrics and queue: no notch swipes there.
-        if Notch.shared.expanded { notchAxisVertical = nil; return false }
+        // The grown player scrolls its lyrics and queue: notch swipes only on
+        // its top band (where the small card was), so swiping up there folds it.
+        let band = notchCatch.maxY - (Notch.shared.size.height + 74)
+        if Notch.shared.expanded, notchAxisVertical == nil, NSEvent.mouseLocation.y < band { return false }
         let dy = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY  // + = fingers up
         // Over the music card sideways swipes seek and skip (swipe(_:)), so
         // it sees every phase too; this one keeps the vertical swipes.
