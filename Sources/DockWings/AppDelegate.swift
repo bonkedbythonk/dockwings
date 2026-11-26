@@ -201,9 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // UI runs. It is a background app, which the launch notifications
         // leave out, so watch the running-app list instead.
         appsWatch = NSWorkspace.shared.observe(\.runningApplications) { [unowned self] _, _ in
-            DispatchQueue.main.async { self.updateScreenshotWatch() }
+            DispatchQueue.main.async { self.updateScreenshotWatch(); self.watchDockProcess() }
         }
         updateScreenshotWatch()
+        watchDockProcess()
         // Looping animations stop while the wings can't be seen.
         for name in [NSWindow.didChangeOcclusionStateNotification] {
             for panel in [musicPanel!, todoPanel!] {
@@ -215,10 +216,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (name, on) in [(NSWorkspace.screensDidSleepNotification, false), (NSWorkspace.screensDidWakeNotification, true),
                            (NSWorkspace.sessionDidResignActiveNotification, false), (NSWorkspace.sessionDidBecomeActiveNotification, true)] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [unowned self] _ in
-                MainActor.assumeIsolated { self.awake = on; self.updateVisible() }
+                MainActor.assumeIsolated { self.awake = on; self.updateVisible(); if on { self.followDock() } }
             }
         }
         layout()
+        followDock()
         updateClicks()
         if let id = UserDefaults.standard.string(forKey: "Open") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -233,6 +235,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { self.layout() }
         }
     }
+
+    /// The Dock is (re)starting: its spacers come back within a second or
+    /// two, so place every 0.1 s for 4 s instead of waiting for the 3 s timer.
+    private func followDock() {
+        followUntil = Date().addingTimeInterval(4)
+        guard followTimer == nil else { return }
+        followTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [unowned self] timer in
+            MainActor.assumeIsolated {
+                self.layout()
+                if Date() > self.followUntil { timer.invalidate(); self.followTimer = nil }
+            }
+        }
+    }
+    /// A new Dock process (restarted for spacers, or crashed): follow it.
+    private func watchDockProcess() {
+        let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        if let pid, pid != dockPID, dockPID != nil { followDock() }
+        dockPID = pid ?? dockPID
+    }
+    private var dockPID: pid_t?
+    private var followTimer: Timer?
+    private var followUntil = Date.distantPast
 
     /// The notch window: fixed size, top-centred on the notch; hidden on
     /// screens without one. Independent of the Dock.
@@ -354,6 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Buddies keep off the app icons. With the Dock bar that is only the
         // apps between the spacer runs: the widget parts are theirs to walk.
         let sides = Config.bar ? DockGeometry.spacerSides() : nil
+        // Dock bar mid-restart (no spacers to read yet): keep the wings where
+        // they are rather than jumping beside a guessed Dock.
+        if Config.bar, sides == nil, musicPanel.isVisible, musicPanel.alphaValue > 0 { return }
         let apps = sides.map { $0.left.maxX...max($0.left.maxX, $0.right.minX) }
         buddy.dockIcons = apps ?? dock.rect.minX...dock.rect.maxX
         // Apps dragged in among the spacers: also not to be stood on.

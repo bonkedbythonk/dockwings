@@ -128,6 +128,12 @@ final class Music: ObservableObject {
             m.playlists = zip(ids, names).map { (id: $0, name: $1) }
         }
         listen("local.tide.levels") { m, info in
+            // Levels only come while Tide plays: if we think it's paused, a
+            // state broadcast was missed, so ask again (at most every 5 s).
+            if !m.isPlaying, Date().timeIntervalSince(m.stateAsked) > 5 {
+                m.stateAsked = Date()
+                m.postToTide("state")
+            }
             // Nothing to draw while the wings can't be seen.
             guard Presence.shared.visible else { return }
             m.live.levels = info["levels"] as? [Double] ?? []
@@ -258,6 +264,7 @@ final class Music: ObservableObject {
     }
 
     private var tideTimingSent = 0.0
+    private var stateAsked = Date.distantPast
 
     private func poll() {
         let apple = applePlayer()
