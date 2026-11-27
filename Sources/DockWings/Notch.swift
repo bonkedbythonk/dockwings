@@ -186,6 +186,10 @@ final class Notch: ObservableObject {
     var lockChanged: ((Bool) -> Void)?
 
     private var queue: [NotchAlert] = []
+    /// The volume or brightness HUD while a card or the player is open: it
+    /// shows in the top band instead of closing what's open.
+    @Published private(set) var hudOver: NotchAlert?
+    private var hudTimer: Timer?
     private var timers: [Timer] = []
     private var finishWhenLeft: String?
 
@@ -196,6 +200,14 @@ final class Notch: ObservableObject {
         if locked && !Self.lockSafe.contains(a.id) { return }
         if fullScreen, Self.parks(a.id) { parked.removeAll { $0.id == a.id }; parked.append(a); return }
         if a.id != "hud" && ((fullScreen && !Self.fullScreenOK(a.id)) || !Self.alertsOn) { return }
+        if a.id == "hud", showsCard {
+            hudOver = a
+            hudTimer?.invalidate()
+            hudTimer = .scheduledTimer(withTimeInterval: a.duration, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.hudOver = nil }
+            }
+            return
+        }
         var a = a
         a.posted = Date()
         queue.removeAll { $0.id == a.id }
@@ -629,6 +641,21 @@ struct NotchView: View {
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
+                // Volume or brightness while a card is open: right of the
+                // camera in the top band, over whatever sits there.
+                if case .card = phase, !glass, let hud = notch.hudOver {
+                    HStack(spacing: 8) {
+                        NotchIcon(icon: hud.icon, small: true)
+                        NotchTrailing(trailing: hud.trailing).frame(width: hudSide)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: n.height)
+                    .background(Color.black)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, flare + 12)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
             }
             .frame(width: width, height: height, alignment: .top)
             .fixedSize(horizontal: false, vertical: height == nil)
@@ -651,6 +678,7 @@ struct NotchView: View {
         .animation(.smooth(duration: 0.34), value: notch.ears)
         // The WaniKani panel changing size (summary, a question, its info).
         .animation(.smooth(duration: 0.34), value: notch.panelHeight)
+        .animation(.easeInOut(duration: 0.2), value: notch.hudOver == nil)
         .environment(\.ambient, notch.visible)
         .foregroundStyle(.white)
     }
