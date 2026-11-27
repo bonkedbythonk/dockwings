@@ -84,6 +84,10 @@ final class WingPlan: ObservableObject {
     private var extras: [Side: Set<String>] = [:]
     /// Widgets shown in their compact form right now (set by `assign`).
     private var compacted: Set<String> = []
+    /// When each compact widget may grow back at the earliest.
+    private var compactUntil: [String: Date] = [:]
+    private var regrowPending = false
+    static let compactHold: TimeInterval = 20
 
     /// Measured width of a widget as shown: compact or full.
     private func width(_ id: String) -> CGFloat {
@@ -196,20 +200,37 @@ final class WingPlan: ObservableObject {
     func assign(_ items: [WingItem], to side: Side) -> [WingItem] {
         // Short of room: widgets with a compact form shrink, least important
         // first, until everything fits or none is left to shrink. Shrinking
-        // that brings no widget back onto the main page is undone.
-        compacted = []
-        var (placed, _) = place(items)
-        func missing(_ placed: [String: Side]) -> Int { items.filter { placed[$0.id] == nil && !$0.onlyIfRoom }.count }
+        // that brings no widget back onto the main page is undone. A widget
+        // shrinks at once but grows back only after the room has stayed free
+        // for a while, so the wing doesn't flip back and forth.
+        let now = Date()
         let shrinkable = items.filter { $0.compact != nil && widths[$0.id + "~compact"] != nil }
             .sorted { $0.priority < $1.priority }
-        var best = (missing: missing(placed), placed: placed, compacted: compacted)
-        for item in shrinkable where best.missing > 0 {
-            compacted.insert(item.id)
-            let next = place(items).placed
-            if missing(next) < best.missing { best = (missing(next), next, compacted) }
+        let held = Set(shrinkable.map(\.id).filter { (compactUntil[$0] ?? .distantPast) > now })
+        func missing(_ placed: [String: Side]) -> Int { items.filter { placed[$0.id] == nil && !$0.onlyIfRoom }.count }
+        func choose(from start: Set<String>) -> (placed: [String: Side], compacted: Set<String>) {
+            compacted = start
+            let first = place(items).placed
+            var best = (missing: missing(first), placed: first, compacted: start)
+            for item in shrinkable where best.missing > 0 && !start.contains(item.id) {
+                compacted.insert(item.id)
+                let next = place(items).placed
+                if missing(next) < best.missing { best = (missing(next), next, compacted) }
+            }
+            return (best.placed, best.compacted.filter { best.placed[$0] != nil })
         }
-        compacted = best.compacted.filter { best.placed[$0] != nil }
-        placed = best.placed
+        let needed = choose(from: []).compacted
+        for id in needed { compactUntil[id] = now.addingTimeInterval(Self.compactHold) }
+        let (placed, chosen) = choose(from: needed.union(held))
+        compacted = chosen
+        // Held ones grow back once their time is up: draw again then.
+        if !held.subtracting(needed).isEmpty, !regrowPending {
+            regrowPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.compactHold + 0.2) {
+                self.regrowPending = false
+                self.objectWillChange.send()
+            }
+        }
         placedSide = placed
         // Home widgets keep their order; guests sit at the Dock end.
         let shown = items.map { item -> WingItem in

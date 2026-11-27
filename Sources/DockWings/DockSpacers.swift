@@ -2,7 +2,7 @@
 // The Dock is as long as its tiles; with the `Bar` key DockWings pads it with
 // blank spacer tiles (after Finder, and after the separator) so it reaches
 // the widest macOS allows. When an app opens or quits, it counts the tiles
-// again and, if the spacers no longer fill the width (or overfill it, which
+// again (also whenever the Dock's width changes) and, if the spacers no longer fill the width (or overfill it, which
 // shrinks every icon), rewrites the two spacer runs in com.apple.dock and
 // restarts the Dock (a moment of flicker). Resizing the Dock does the same.
 // Only spacer tiles are touched.
@@ -23,12 +23,16 @@ enum DockSpacers {
                 MainActor.assumeIsolated { schedule() }
             }
         }
-        // Resizing the Dock (its tile size) changes how many spacers fit.
+        // Resizing the Dock (its tile size) changes how many spacers fit, and
+        // the Dock can change width without an app opening or quitting (a
+        // running app's icon merging into its pinned one): count again then.
         var size = tileSize()
+        var width = DockGeometry.usableDock()?.rect.width
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             MainActor.assumeIsolated {
                 let now = tileSize()
-                if now != size { size = now; schedule() }
+                let wide = DockGeometry.usableDock()?.rect.width
+                if now != size || wide != width { size = now; width = wide; schedule() }
             }
         }
         schedule()
