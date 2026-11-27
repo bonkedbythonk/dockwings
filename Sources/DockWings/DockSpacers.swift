@@ -4,7 +4,8 @@
 // the widest macOS allows. When an app opens or quits, it counts the tiles
 // again and, if the spacers no longer fill the width (or overfill it, which
 // shrinks every icon), rewrites the two spacer runs in com.apple.dock and
-// restarts the Dock (a moment of flicker). Only spacer tiles are touched.
+// restarts the Dock (a moment of flicker). Resizing the Dock does the same.
+// Only spacer tiles are touched.
 import AppKit
 
 @MainActor
@@ -22,7 +23,21 @@ enum DockSpacers {
                 MainActor.assumeIsolated { schedule() }
             }
         }
+        // Resizing the Dock (its tile size) changes how many spacers fit.
+        var size = tileSize()
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                let now = tileSize()
+                if now != size { size = now; schedule() }
+            }
+        }
         schedule()
+    }
+
+    private static func tileSize() -> Double {
+        let id = "com.apple.dock" as CFString
+        CFPreferencesAppSynchronize(id)
+        return (CFPreferencesCopyAppValue("tilesize" as CFString, id) as? NSNumber)?.doubleValue ?? 0
     }
 
     /// Waits for the Dock to show the change (and for a burst of launches
@@ -35,26 +50,30 @@ enum DockSpacers {
     }
 
     private static func adjust() {
-        guard let screen = NSScreen.main, let items = DockGeometry.items(),
-              let prefs = UserDefaults(suiteName: "com.apple.dock") else { return }
+        guard let screen = NSScreen.main, let items = DockGeometry.items() else { return }
         // Restarting again within seconds would be a flicker storm.
         guard Date().timeIntervalSince(lastRestart) > 8 else { schedule(); return }
-        let tile = CGFloat(prefs.double(forKey: "tilesize") > 0 ? prefs.double(forKey: "tilesize") : 57)
-        // A tile's slot at full size is about 4 pt wider than the icon; the
-        // separator about 27 pt. macOS keeps the Dock about 42 pt from each
-        // screen edge at most (measured on macOS 27).
-        let slot = tile + 4, separator: CGFloat = 27
-        let room = screen.frame.width - 84
-        var others: CGFloat = 0
-        var spacers = 0
-        for item in items {
-            switch item.subrole {
-            case "AXSpacerDockItem": spacers += 1
-            case "AXSeparatorDockItem": others += separator
-            default: others += slot
-            }
+        let tile = CGFloat(tileSize() > 0 ? tileSize() : 54)
+        // macOS keeps the Dock's list at least 68 pt from each screen edge
+        // (measured on macOS 27, tile sizes 46 and 54).
+        let widest = screen.frame.width - 136
+        var spacers = 0, spacerWidth: CGFloat = 0
+        for item in items where item.subrole == "AXSpacerDockItem" { spacers += 1; spacerWidth = item.width }
+        guard spacerWidth > 0, let list = DockGeometry.usableDock()?.rect.width else { return }
+        // A tile's slot at its set size (measured: 48 pt at 46, 58 pt at 54).
+        // When the Dock overflows, macOS shrinks every tile by the same factor.
+        let slot = 1.25 * tile - 9.5
+        let shrink = min(1, spacerWidth / slot)
+        let wanted: Int
+        if list < widest - 1 {
+            // Room left: the real tile width says how many more fit.
+            wanted = spacers + Int(((widest - list) / spacerWidth).rounded(.down))
+        } else if shrink < 0.97 {
+            // Overflowing: drop enough to bring the tiles back to full size.
+            wanted = max(0, spacers - Int(((list / shrink - widest) / slot).rounded(.up)))
+        } else {
+            return
         }
-        let wanted = max(0, Int(((room - others) / slot).rounded(.down)))
         guard wanted != spacers else { return }
         // Half after Finder, half after the separator (the left gets the odd one).
         rewrite(left: (wanted + 1) / 2, right: wanted / 2)
@@ -80,5 +99,7 @@ enum DockSpacers {
         kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
         kill.arguments = ["Dock"]
         try? kill.run()
+        // Measure again once the new Dock is up; the first count can be off by one.
+        schedule()
     }
 }

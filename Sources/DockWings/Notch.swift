@@ -793,10 +793,13 @@ private struct MusicCard: View {
                 Color.clear.frame(width: 22, height: 22).tapAction(openDrawer)
                 EqualizerBars(playing: music.isPlaying, live: music.live)
                 Spacer(minLength: band.width + 16)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(MusicDrawer.clock(music.progress(at: context.date) * music.duration) + " / " + MusicDrawer.clock(music.duration))
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.6))
+                // No length known (Tide sent none): no time rather than 0:00 / 0:00.
+                if music.duration > 0 {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(MusicDrawer.clock(music.progress(at: context.date) * music.duration) + " / " + MusicDrawer.clock(music.duration))
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
                 }
             }
             .frame(height: band.height)
