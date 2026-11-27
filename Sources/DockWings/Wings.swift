@@ -1,8 +1,7 @@
 // The two wings beside the Dock. Every widget has a home side and a
 // priority; WingPlan measures all of them and fills both sides from the
-// screen corners inward, most important first. A widget that doesn't fit on
-// its home side moves to the other side when there is room there, unless it
-// is quiet (priority 3 or less: it stays home on a later page). Widgets rise
+// screen corners inward, most important first. A widget always stays on its
+// home side; one that doesn't fit goes to a later page there. Widgets rise
 // in and out, slide when neighbours change, bump when their content changes,
 // and magnify with the Dock's own setting. Widgets that fit nowhere go onto
 // extra pages per side; a two-finger swipe up or down over a wing flips pages.
@@ -256,29 +255,9 @@ final class WingPlan: ObservableObject {
                 placed[item.id] = candidate
             }
         }
-        // Everyone gets their home side first; leftovers try the other side,
-        // except quiet ones (priority 3 or less), which stay home on a later
-        // page (weather keeps a paused player company).
+        // Widgets stay on their home side; leftovers go to a later page there
+        // (moving across made the wings reshuffle).
         for item in ranked { tryPlace(item, on: item.home) }
-        for item in ranked where placed[item.id] == nil && item.priority > 3 { tryPlace(item, on: item.home == .left ? .right : .left) }
-        // Dock bar: both sides are part of one Dock, so even them out (one
-        // side full while the other sits empty looks broken). Each move must
-        // make the difference smaller, so this ends.
-        if Config.bar {
-            while true {
-                let full: Side = used[.left]! >= used[.right]! ? .left : .right
-                let other: Side = full == .left ? .right : .left
-                let diff = used[full]! - used[other]!
-                let best = ranked.filter { placed[$0.id] == full }
-                    .map { ($0.id, self.width($0.id) + Self.minSpacing) }
-                    .filter { used[other]! + $0.1 <= room(other) && abs(diff - 2 * $0.1) < diff }
-                    .min { abs(diff - 2 * $0.1) < abs(diff - 2 * $1.1) }
-                guard let (id, w) = best else { break }
-                placed[id] = other
-                used[full]! -= w
-                used[other]! += w
-            }
-        }
         return (placed, used)
     }
 }

@@ -78,7 +78,8 @@ final class Latest: ObservableObject {
     }
 
     /// Called when a drag of the item starts: once the button is released away
-    /// from where it started (dropped somewhere), the item is done and goes.
+    /// from where it started (dropped somewhere), the item is done and goes,
+    /// and a screenshot file goes to the Trash.
     func dragStarted() {
         let start = NSEvent.mouseLocation
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
@@ -86,7 +87,14 @@ final class Latest: ObservableObject {
             timer.invalidate()
             let end = NSEvent.mouseLocation
             guard hypot(end.x - start.x, end.y - start.y) > 60 else { return }
-            Task { @MainActor in self?.dismiss() }
+            Task { @MainActor in
+                // A screenshot dropped somewhere is done with: it goes to the
+                // Trash (if the drop moved it, it is already gone).
+                if let item = self?.item, item.isScreenshot, FileManager.default.fileExists(atPath: item.url.path) {
+                    try? FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+                }
+                self?.dismiss()
+            }
         }
     }
 
