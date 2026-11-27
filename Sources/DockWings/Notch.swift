@@ -225,14 +225,18 @@ final class Notch: ObservableObject {
         guard alert?.id == id else { return }
         if hovering, alert?.duration ?? 0 > 0 { finishWhenLeft = id; return }
         timers.forEach { $0.invalidate() }
-        alert = nil
         cardShown = false
         // Moments that waited too long are old news.
         queue.removeAll { $0.duration > 0 && Date().timeIntervalSince($0.posted) > 8 }
-        guard !queue.isEmpty else { return }
+        guard !queue.isEmpty else { alert = nil; return }
         // Others before the music: it joins them beside the camera (shared
         // notch), while one waiting behind the music would be hidden.
         let next = queue.remove(at: queue.firstIndex { $0.id != "music" } ?? 0)
+        // The music was already showing beside it: the next one (or the
+        // music itself) takes over in one move, without the notch closing
+        // in between.
+        if next.id == "music" || music != nil { show(next); return }
+        alert = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if self.alert == nil { self.show(next) } }
     }
 
