@@ -187,7 +187,7 @@ final class Notch: ObservableObject {
 
     private var queue: [NotchAlert] = []
     /// The volume or brightness HUD while the music or WaniKani card is open:
-    /// a pill under the card instead of closing it.
+    /// the card grows a row for it instead of closing.
     @Published private(set) var hudOver: NotchAlert?
     private var hudTimer: Timer?
     private var timers: [Timer] = []
@@ -543,9 +543,11 @@ struct NotchView: View {
     /// (the music player a fixed size, WaniKani as tall as its content).
     private var cardHeight: CGFloat {
         let n = notch.size
-        guard notch.expanded else { return n.height + 74 }
-        if notch.alert?.id.hasPrefix("wk-") == true, notch.panelHeight > 0 { return notch.panelHeight }
-        return n.height + 446
+        // The volume row, while it shows, adds to whichever height.
+        let hud: CGFloat = notch.hudOver != nil ? HUDRow.height : 0
+        guard notch.expanded else { return n.height + 74 + hud }
+        if notch.alert?.id.hasPrefix("wk-") == true, notch.panelHeight > 0 { return notch.panelHeight + hud }
+        return n.height + 446 + hud
     }
 
     /// Solid black down past the hardware notch (its bottom edge would
@@ -621,6 +623,14 @@ struct NotchView: View {
                 .id(phase)
                 .transition(.blurIn)
                 .padding(.horizontal, flare)
+                if case .card = phase, !glass, let hud = notch.hudOver {
+                    HUDRow(hud: hud)
+                        .padding(.horizontal, flare + 20)
+                        .padding(.bottom, 14)
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
                 // The music's small notch (cover, levels) is one lasting view
                 // that fades out while the card fades in: swapped out like the
                 // rest, the bare notch showed for a frame between them.
@@ -647,9 +657,6 @@ struct NotchView: View {
             // Content stays inside the shape while it shrinks.
             .mask(NotchShape(flare: flare, bottom: bottom))
             if glass, let a = notch.alert { glassBox(a) }
-            if !glass, let hud = notch.hudOver {
-                HUDPill(hud: hud).transition(.scale(scale: 0.6, anchor: .top).combined(with: .opacity))
-            }
         }
         .dropDestination(for: URL.self) { urls, _ in
             notch.onDrop?(urls)
@@ -800,18 +807,27 @@ struct NotchView: View {
 /// (left) and the time (right); below it the title, the lyric line or
 /// artist, the controls and the seek bar. A click on the cover, title or list
 /// button, or anywhere on the card, grows the notch into the whole player.
-/// Volume or brightness while a card is open: a small pill under it.
-private struct HUDPill: View {
+/// Volume or brightness while a card is open: a row the card grows at its
+/// bottom, the icon and a level bar as wide as the card.
+private struct HUDRow: View {
     let hud: NotchAlert
+    static let height: CGFloat = 30
 
     var body: some View {
-        HStack(spacing: 8) {
-            NotchIcon(icon: hud.icon, small: true)
-            NotchTrailing(trailing: hud.trailing).frame(width: 44)
+        HStack(spacing: 10) {
+            NotchIcon(icon: hud.icon, small: true).frame(width: 20)
+            if case let .level(value) = hud.trailing {
+                // Negative: muted, the bar keeps its length but goes grey.
+                let v = value.isFinite ? min(1, max(0, abs(value))) : 0
+                Capsule().fill(.white.opacity(0.2)).frame(height: 5)
+                    .overlay {
+                        Capsule().fill(.white.opacity(value < 0 ? 0.35 : 1))
+                            .scaleEffect(x: v, anchor: .leading)
+                    }
+                    .animation(.smooth(duration: 0.18), value: value)
+            }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 30)
-        .background(Capsule().fill(.black))
+        .frame(height: Self.height)
     }
 }
 
