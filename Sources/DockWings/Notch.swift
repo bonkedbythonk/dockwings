@@ -115,10 +115,20 @@ final class Notch: ObservableObject {
         if Self.grows(alert?.id) { expanded = true } else if !cardShown { cardShown = true }
     }
 
-    /// Swipe up: closes the card, else sends the alert away.
+    /// Swipe up: closes the card, else sends the alert away. With two things
+    /// that stay (a chat that needs you and the music), it switches to the
+    /// other one, so the music can be used while the question waits.
     func swipeUp() {
         // The playing track stays: swiping up only closes its card or player.
         if expanded { expanded = false; cardShown = false; clicked = true }
+        else if let a = alert, a.duration == 0, a.id != "drop", !reviewing,
+                let i = queue.firstIndex(where: { $0.duration == 0 }) {
+            var current = a
+            current.opensCard = false
+            let next = queue.remove(at: i)
+            queue.append(current)
+            show(next)
+        }
         else if cardShown { cardShown = false }
         // Ongoing things (music, WaniKani, a chat that needs you: no timer)
         // aren't swiped away, only passing alerts.
