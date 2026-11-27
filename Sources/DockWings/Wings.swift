@@ -293,7 +293,7 @@ struct WingSide: View {
             }(),
             WingItem("claude", .right, show: focus != nil, priority: claudeActive ? 7 : 2, bump: "\(focus?.id ?? "")\(String(describing: focus?.session.state))") { ClaudeView(claude: claude) },
             WingItem("job", .right, show: jobs.job != nil, priority: 6, bump: jobs.job?.date) { JobView(jobs: jobs) },
-            WingItem("latest", .right, show: latest.item != nil, priority: 6, bump: latest.item?.url) { LatestView(latest: latest) },
+            WingItem("latest", .right, show: latest.item != nil, priority: latest.item?.isScreenshot == true ? 10 : 6, bump: latest.item?.url) { LatestView(latest: latest) },
             WingItem("todo", .right, show: !todos.upcoming.isEmpty || todos.denied, priority: 3, bump: todos.upcoming.count) { TodoView(todos: todos, height: pointer.boxHeight) },
             WingItem("clipboard", .right, show: clipboard.recent && !clipboard.entries.isEmpty, priority: 2, bump: clipboard.entries.first?.id) { ClipboardView(clipboard: clipboard) },
             WingItem("phone", .right, show: phone.status != nil, priority: 5, bump: phone.status?.reason) { PhoneAppsView(phone: phone) },

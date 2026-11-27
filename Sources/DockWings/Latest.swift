@@ -77,6 +77,19 @@ final class Latest: ObservableObject {
         }
     }
 
+    /// Called when a drag of the item starts: once the button is released away
+    /// from where it started (dropped somewhere), the item is done and goes.
+    func dragStarted() {
+        let start = NSEvent.mouseLocation
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
+            timer.invalidate()
+            let end = NSEvent.mouseLocation
+            guard hypot(end.x - start.x, end.y - start.y) > 60 else { return }
+            Task { @MainActor in self?.dismiss() }
+        }
+    }
+
     func dismiss() {
         dismissed = item?.url
         item = nil
@@ -113,7 +126,10 @@ struct LatestView: View {
                       maxWidth: 130)
             }
             .tapAction { NSWorkspace.shared.open(item.url) }
-            .draggable(item.url)
+            .onDrag {
+                latest.dragStarted()
+                return NSItemProvider(object: item.url as NSURL)
+            }
             .contextMenu {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
                 Button("Dismiss") { latest.dismiss() }
