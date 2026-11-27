@@ -224,6 +224,8 @@ final class ClaudeStatus: ObservableObject {
 
 struct ClaudeView: View {
     @ObservedObject var claude: ClaudeStatus
+    /// Mark only, when the wing is short of room.
+    var compact = false
     /// Width of the text: grows at once for longer text, shrinks only after
     /// the text has stayed shorter for a while, so the widget neither jumps
     /// on every step nor keeps a big gap.
@@ -248,25 +250,27 @@ struct ClaudeView: View {
                                 .transition(.scale)
                         }
                     }
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(session.project).font(.system(size: 14, weight: .semibold))
-                        Text(session.activity).font(.system(size: 12))
-                            .foregroundStyle(session.state == .waiting ? AnyShapeStyle(Color(red: 1, green: 0.72, blue: 0.55)) : AnyShapeStyle(ink(0.6)))
-                            .modifier(Shimmer(on: session.state == .working))
-                            .id(session.activity)
-                            .transition(.blurReplace)
-                    }
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(width: textWidth > 0 ? textWidth : nil, alignment: .leading)
-                    .background(alignment: .leading) {
+                    if !compact {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(session.project).font(.system(size: 14, weight: .semibold))
                             Text(session.activity).font(.system(size: 12))
+                                .foregroundStyle(session.state == .waiting ? AnyShapeStyle(Color(red: 1, green: 0.72, blue: 0.55)) : AnyShapeStyle(ink(0.6)))
+                                .modifier(Shimmer(on: session.state == .working))
+                                .id(session.activity)
+                                .transition(.blurReplace)
                         }
-                        .fixedSize()
-                        .hidden()
-                        .onGeometryChange(for: CGFloat.self) { ceil(min($0.size.width, 170)) } action: { fit($0) }
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: textWidth > 0 ? textWidth : nil, alignment: .leading)
+                        .background(alignment: .leading) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(session.project).font(.system(size: 14, weight: .semibold))
+                                Text(session.activity).font(.system(size: 12))
+                            }
+                            .fixedSize()
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { ceil(min($0.size.width, 170)) } action: { fit($0) }
+                        }
                     }
                 }
             }

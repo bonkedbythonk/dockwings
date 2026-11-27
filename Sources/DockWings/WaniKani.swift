@@ -439,6 +439,8 @@ enum WK {
 
 struct WaniKaniView: View {
     @ObservedObject var wk: WaniKani
+    /// Tile only, when the wing is short of room.
+    var compact = false
 
     /// Nothing to do: the tile shows a known item instead.
     private var idle: WKItem? { wk.connected && !wk.hasWork ? wk.idleWord : nil }
@@ -478,8 +480,9 @@ struct WaniKaniView: View {
             // The ring sits outside the tile; count it in the width so it never
             // spills into the gap beside the Dock.
             .padding(.horizontal, 5)
-            // During a review only the tile shows, so music keeps its room.
-            if !wk.reviewing {
+            // During a review (or when room is short) only the tile shows, so
+            // music keeps its room.
+            if !wk.reviewing && !compact {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 14, weight: .semibold)).contentTransition(.numericText())
                     Text(subtitle).font(.system(size: 12)).foregroundStyle(ink(0.6))

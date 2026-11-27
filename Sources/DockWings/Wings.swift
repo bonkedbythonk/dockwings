@@ -19,7 +19,7 @@ struct WingItem {
     let show: Bool
     let priority: Int
     let bump: AnyHashable
-    let view: AnyView
+    var view: AnyView
     /// What to measure for layout: the widget at its widest, so hovering
     /// never reshuffles the wings.
     let widest: AnyView
@@ -28,6 +28,9 @@ struct WingItem {
     /// Shown only when it fits on a main page; never sent to a later page
     /// (the music widget while the song also plays in the notch).
     var onlyIfRoom = false
+    /// A smaller form (icon only) used when the wing is short of room, before
+    /// any widget has to move to a later page.
+    var compact: AnyView?
 
     init<V: View, W: View>(_ id: String, _ home: Side, show: Bool, priority: Int, bump: AnyHashable = 0,
                            @ViewBuilder _ view: () -> V, @ViewBuilder widest: () -> W) {
@@ -42,6 +45,12 @@ struct WingItem {
 
     init<V: View>(_ id: String, _ home: Side, show: Bool, priority: Int, bump: AnyHashable = 0, @ViewBuilder _ view: () -> V) {
         self.init(id, home, show: show, priority: priority, bump: bump, view, widest: view)
+    }
+
+    func compact<V: View>(@ViewBuilder _ view: () -> V) -> WingItem {
+        var item = self
+        item.compact = AnyView(view())
+        return item
     }
 }
 
@@ -73,6 +82,13 @@ final class WingPlan: ObservableObject {
     /// Widgets on a side's later pages (kept apart: both sides recompute
     /// `placedSide` for the main page).
     private var extras: [Side: Set<String>] = [:]
+    /// Widgets shown in their compact form right now (set by `assign`).
+    private var compacted: Set<String> = []
+
+    /// Measured width of a widget as shown: compact or full.
+    private func width(_ id: String) -> CGFloat {
+        widths[compacted.contains(id) ? id + "~compact" : id] ?? 140
+    }
 
     /// Side a widget is shown on, main page or later.
     func side(of id: String) -> Side? {
@@ -97,7 +113,7 @@ final class WingPlan: ObservableObject {
     func pages(_ items: [WingItem], for side: Side, pinned: String? = nil) -> [[WingItem]] {
         let first = assign(items, to: side)
         var room = room(side)
-        if let pinned, placedSide[pinned] == side { room -= (widths[pinned] ?? 140) + Self.minSpacing }
+        if let pinned, placedSide[pinned] == side { room -= width(pinned) + Self.minSpacing }
         var pages: [[WingItem]] = [first]
         // First fit: each leftover joins the earliest later page with room,
         // so a small widget fills a gap instead of waiting for a new page.
@@ -142,7 +158,7 @@ final class WingPlan: ObservableObject {
     /// Dock-end margin and widget spacing for a side: full while widgets fit
     /// with them, smaller when a widget would otherwise move to another page.
     func fit(_ items: [WingItem], on side: Side) -> (dockMargin: CGFloat, spacing: CGFloat) {
-        let widgets = items.reduce(0) { $0 + (widths[$1.id] ?? 140) }
+        let widgets = items.reduce(0) { $0 + width($1.id) }
         let gaps = CGFloat(max(items.count - 1, 0))
         let free = (space[side] ?? 0) - Self.margin - widgets
         let dockMargin = free - gaps * Self.spacing
@@ -172,17 +188,48 @@ final class WingPlan: ObservableObject {
 
     /// Room left over on a side after its widgets, for one that can grow.
     func spare(_ items: [WingItem], on side: Side) -> CGFloat {
-        let used = items.reduce(0) { $0 + (widths[$1.id] ?? 140) } + CGFloat(max(items.count - 1, 0)) * Self.spacing
+        let used = items.reduce(0) { $0 + width($1.id) } + CGFloat(max(items.count - 1, 0)) * Self.spacing
         return max(0, (space[side] ?? 0) - 2 * Self.margin - used - 8)
     }
 
     /// Widgets for one side, in display order (screen corner first).
     func assign(_ items: [WingItem], to side: Side) -> [WingItem] {
+        // Short of room: widgets with a compact form shrink, least important
+        // first, until everything fits or none is left to shrink. Shrinking
+        // that brings no widget back onto the main page is undone.
+        compacted = []
+        var (placed, _) = place(items)
+        func missing(_ placed: [String: Side]) -> Int { items.filter { placed[$0.id] == nil && !$0.onlyIfRoom }.count }
+        let shrinkable = items.filter { $0.compact != nil && widths[$0.id + "~compact"] != nil }
+            .sorted { $0.priority < $1.priority }
+        var best = (missing: missing(placed), placed: placed, compacted: compacted)
+        for item in shrinkable where best.missing > 0 {
+            compacted.insert(item.id)
+            let next = place(items).placed
+            if missing(next) < best.missing { best = (missing(next), next, compacted) }
+        }
+        compacted = best.compacted.filter { best.placed[$0] != nil }
+        placed = best.placed
+        placedSide = placed
+        // Home widgets keep their order; guests sit at the Dock end.
+        let shown = items.map { item -> WingItem in
+            guard compacted.contains(item.id), let small = item.compact else { return item }
+            var item = item
+            item.view = small
+            return item
+        }
+        let home = shown.filter { $0.home == side && placed[$0.id] == side }
+        let guests = shown.filter { $0.home != side && placed[$0.id] == side }
+        return side == .left ? home + guests : guests + home
+    }
+
+    /// Which side each widget goes on, at the widths they have now.
+    private func place(_ items: [WingItem]) -> (placed: [String: Side], used: [Side: CGFloat]) {
         var used: [Side: CGFloat] = [.left: 0, .right: 0]
         var placed: [String: Side] = [:]
         let ranked = items.sorted { $0.priority > $1.priority }
         func tryPlace(_ item: WingItem, on candidate: Side) {
-            let extra = (widths[item.id] ?? 140) + (used[candidate]! > 0 ? Self.minSpacing : 0)
+            let extra = width(item.id) + (used[candidate]! > 0 ? Self.minSpacing : 0)
             if used[candidate]! + extra <= room(candidate) {
                 used[candidate]! += extra
                 placed[item.id] = candidate
@@ -202,7 +249,7 @@ final class WingPlan: ObservableObject {
                 let other: Side = full == .left ? .right : .left
                 let diff = used[full]! - used[other]!
                 let best = ranked.filter { placed[$0.id] == full }
-                    .map { ($0.id, (widths[$0.id] ?? 140) + Self.minSpacing) }
+                    .map { ($0.id, self.width($0.id) + Self.minSpacing) }
                     .filter { used[other]! + $0.1 <= room(other) && abs(diff - 2 * $0.1) < diff }
                     .min { abs(diff - 2 * $0.1) < abs(diff - 2 * $1.1) }
                 guard let (id, w) = best else { break }
@@ -211,11 +258,7 @@ final class WingPlan: ObservableObject {
                 used[other]! += w
             }
         }
-        placedSide = placed
-        // Home widgets keep their order; guests sit at the Dock end.
-        let home = items.filter { $0.home == side && placed[$0.id] == side }
-        let guests = items.filter { $0.home != side && placed[$0.id] == side }
-        return side == .left ? home + guests : guests + home
+        return (placed, used)
     }
 }
 
@@ -277,7 +320,8 @@ struct WingSide: View {
                      bump: shelf.items.count) { ShelfView(shelf: shelf) },
             WingItem("wanikani", .left, show: wanikani.connected && !wanikani.inNotch,
                      priority: wanikani.reviewing ? 8 : wanikani.celebrating ? 7 : !wanikani.hasWork ? 1 : wanikani.nudging ? 5 : 4,
-                     bump: "\(wanikani.doneToday)\(wanikani.lessonsToday)\(wanikani.nudging)\(wanikani.celebrating)\(wanikani.reviewing)") { WaniKaniView(wk: wanikani) },
+                     bump: "\(wanikani.doneToday)\(wanikani.lessonsToday)\(wanikani.nudging)\(wanikani.celebrating)\(wanikani.reviewing)") { WaniKaniView(wk: wanikani) }
+                .compact { WaniKaniView(wk: wanikani, compact: true) },
             WingItem("health", .left, show: health.issue != nil, priority: health.issue?.critical == true ? 8 : 5,
                      bump: health.issue?.key) { HealthView(health: health) },
             {
@@ -291,7 +335,8 @@ struct WingSide: View {
                 item.onlyIfRoom = alsoInNotch
                 return item
             }(),
-            WingItem("claude", .right, show: focus != nil, priority: claudeActive ? 7 : 2, bump: "\(focus?.id ?? "")\(String(describing: focus?.session.state))") { ClaudeView(claude: claude) },
+            WingItem("claude", .right, show: focus != nil, priority: claudeActive ? 7 : 2, bump: "\(focus?.id ?? "")\(String(describing: focus?.session.state))") { ClaudeView(claude: claude) }
+                .compact { ClaudeView(claude: claude, compact: true) },
             WingItem("job", .right, show: jobs.job != nil, priority: 6, bump: jobs.job?.date) { JobView(jobs: jobs) },
             WingItem("latest", .right, show: latest.item != nil, priority: latest.item?.isScreenshot == true ? 10 : 6, bump: latest.item?.url) { LatestView(latest: latest) },
             WingItem("todo", .right, show: !todos.upcoming.isEmpty || todos.denied, priority: 3, bump: todos.upcoming.count) { TodoView(todos: todos, height: pointer.boxHeight) },
@@ -377,6 +422,10 @@ struct WingSide: View {
                 ForEach(shown, id: \.id) { item in
                     item.widest.fixedSize()
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { plan.measured(item.id, $0) }
+                    if let small = item.compact {
+                        small.fixedSize()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { plan.measured(item.id + "~compact", $0) }
+                    }
                 }
             }
             .frame(height: pointer.boxHeight)
