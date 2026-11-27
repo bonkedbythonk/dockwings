@@ -186,8 +186,8 @@ final class Notch: ObservableObject {
     var lockChanged: ((Bool) -> Void)?
 
     private var queue: [NotchAlert] = []
-    /// The volume or brightness HUD while a card or the player is open: it
-    /// shows in the top band instead of closing what's open.
+    /// The volume or brightness HUD while the music or WaniKani card is open:
+    /// it takes the top row's right end instead of closing the card.
     @Published private(set) var hudOver: NotchAlert?
     private var hudTimer: Timer?
     private var timers: [Timer] = []
@@ -200,7 +200,7 @@ final class Notch: ObservableObject {
         if locked && !Self.lockSafe.contains(a.id) { return }
         if fullScreen, Self.parks(a.id) { parked.removeAll { $0.id == a.id }; parked.append(a); return }
         if a.id != "hud" && ((fullScreen && !Self.fullScreenOK(a.id)) || !Self.alertsOn) { return }
-        if a.id == "hud", showsCard {
+        if a.id == "hud", showsCard, Self.grows(alert?.id) {
             hudOver = a
             hudTimer?.invalidate()
             hudTimer = .scheduledTimer(withTimeInterval: a.duration, repeats: false) { [weak self] _ in
@@ -641,21 +641,6 @@ struct NotchView: View {
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
-                // Volume or brightness while a card is open: right of the
-                // camera in the top band, over whatever sits there.
-                if case .card = phase, !glass, let hud = notch.hudOver {
-                    HStack(spacing: 8) {
-                        NotchIcon(icon: hud.icon, small: true)
-                        NotchTrailing(trailing: hud.trailing).frame(width: hudSide)
-                    }
-                    .padding(.horizontal, 8)
-                    .frame(height: n.height)
-                    .background(Color.black)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, flare + 12)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                }
             }
             .frame(width: width, height: height, alignment: .top)
             .fixedSize(horizontal: false, vertical: height == nil)
@@ -678,7 +663,6 @@ struct NotchView: View {
         .animation(.smooth(duration: 0.34), value: notch.ears)
         // The WaniKani panel changing size (summary, a question, its info).
         .animation(.smooth(duration: 0.34), value: notch.panelHeight)
-        .animation(.easeInOut(duration: 0.2), value: notch.hudOver == nil)
         .environment(\.ambient, notch.visible)
         .foregroundStyle(.white)
     }
@@ -812,6 +796,19 @@ struct NotchView: View {
 /// (left) and the time (right); below it the title, the lyric line or
 /// artist, the controls and the seek bar. A click on the cover, title or list
 /// button, or anywhere on the card, grows the notch into the whole player.
+/// Volume or brightness in an open card's top row: icon and level.
+private struct BandHUD: View {
+    let hud: NotchAlert
+
+    var body: some View {
+        HStack(spacing: 8) {
+            NotchIcon(icon: hud.icon, small: true)
+            NotchTrailing(trailing: hud.trailing).frame(width: 44)
+        }
+        .transition(.opacity)
+    }
+}
+
 private struct MusicCard: View {
     @ObservedObject var music: Music
     @ObservedObject private var notch = Notch.shared
@@ -825,8 +822,10 @@ private struct MusicCard: View {
                 Color.clear.frame(width: 22, height: 22).tapAction(openDrawer)
                 EqualizerBars(playing: music.isPlaying, live: music.live)
                 Spacer(minLength: band.width + 16)
-                // No length known (Tide sent none): no time rather than 0:00 / 0:00.
-                if music.duration > 0 {
+                if let hud = notch.hudOver {
+                    BandHUD(hud: hud)
+                } else if music.duration > 0 {
+                    // No length known (Tide sent none): no time rather than 0:00 / 0:00.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Text(MusicDrawer.clock(music.progress(at: context.date) * music.duration) + " / " + MusicDrawer.clock(music.duration))
                             .font(.system(size: 11, weight: .medium).monospacedDigit())
@@ -900,7 +899,7 @@ private struct WaniKaniNotchCard: View {
             HStack(spacing: 8) {
                 Color.clear.frame(width: 22, height: 22)
                 Spacer(minLength: band.width + 16)
-                NotchTrailing(trailing: alert.trailing)
+                if let hud = notch.hudOver { BandHUD(hud: hud) } else { NotchTrailing(trailing: alert.trailing) }
             }
             .frame(height: band.height)
             if notch.expanded {
