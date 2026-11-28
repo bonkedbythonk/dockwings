@@ -5,7 +5,7 @@
 // keyframes and its moves position animations, so nothing ticks between
 // decisions. What to do next comes from BuddyBrain.swift (pure, tested in
 // tools/buddy-brain-check.swift); this file plays the steps and feeds the
-// brain what the Mac is doing: music (and Tide's beat, straight to a layer),
+// brain what the Mac is doing: music,
 // Claude working / waiting / done, typing, idle (sleep after 2 minutes),
 // battery, heat, a new download or screenshot, the front window (a platform
 // to climb onto, polled once a second, three times while someone stands on
@@ -216,7 +216,7 @@ enum BuddyLog {
 private final class Mascot {
     let path: String
     let pack: ShimejiPack
-    /// At the anchor point; the beat moves it a little.
+    /// At the anchor point.
     let holder = CALayer()
     let sprite = CALayer()
     var state: MascotState
@@ -391,7 +391,6 @@ final class Buddy {
             if playing { self.nudge() }
         })
         reactions(music: music, claude: claude, latest: latest, batteries: batteries, clipboard: clipboard, todos: todos, wanikani: wanikani)
-        music.live.others.append { [weak self] levels in self?.beat(levels) }
         feeds.append(claude.$sessions.map { sessions -> ClaudeMood in
             let states = sessions.values.map(\.state)
             return states.contains(.waiting) ? .waiting : states.contains(.working) ? .working : .none
@@ -1128,23 +1127,6 @@ final class Buddy {
         m.holder.add(anim, forKey: "move")
     }
 
-    /// Tide's levels while music plays: buddies standing or sitting bop to them,
-    /// straight on the layer.
-    private func beat(_ levels: [Double]) {
-        guard live, (forced ?? signals).musicPlaying else { return }
-        let level = levels.isEmpty ? 0 : levels.reduce(0, +) / Double(levels.count)
-        let lift = CGFloat(level.isFinite ? min(max(level, 0), 1) : 0) * size * 0.14
-        for m in mascots {
-            // Everyone standing or dancing bops; not sitting or lying (they would
-            // float above what they sit on), walking, climbing or flying.
-            var still = false
-            if case .play? = m.doing, m.state.surface == .floor || { if case .window = m.state.surface { return true }; return false }() { still = true }
-            let seated = m.action.hasPrefix("Sit") || m.action == "Sprawl"
-            let y = still && !seated && !m.state.asleep ? lift : 0
-            if m.holder.transform.m42 != y { without { m.holder.transform = CATransform3DMakeTranslation(0, y, 0) } }
-        }
-    }
-
     // MARK: Reactions
 
     private enum Reaction { case hop(Int), lookUp, dance, sit, flop }
@@ -1837,13 +1819,6 @@ final class Buddy {
         at("claude waiting", 8) { [unowned self] in self.forced?.claude = .waiting; self.replan(m) }
         at("claude done", 4) { [unowned self] in self.forced?.claude = .none; self.cheer() }
         at("music", 8) { [unowned self] in self.forced = Signals(); self.forced?.musicPlaying = true; self.replan(m) }
-        at("beat", 2) { [unowned self] in
-            if self.forced == nil { self.forced = Signals() }
-            self.forced?.musicPlaying = true
-            self.force(m, [.play(m.moves.has("SitAndSpinHead") ? "SitAndSpinHead" : "Stand", seconds: 2)])
-            for i in 0..<20 { DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.07) { self.beat([i % 2 == 0 ? 0.9 : 0.1]) } }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { BuddyLog.write("TEST beat lift \(m.holder.transform.m42) doing \(String(describing: m.doing)) on \(m.state.surface) music \((self.forced ?? self.signals).musicPlaying) live \(self.live)") }
-        }
         at("typing", 5) { [unowned self] in self.forced = Signals(); self.forced?.typing = true; self.replan(m) }
         at("low battery", 6) { [unowned self] in self.forced = Signals(); self.forced?.lowBattery = true; self.replan(m) }
         at("hot", 6) { [unowned self] in self.forced = Signals(); self.forced?.hot = true; self.replan(m) }
