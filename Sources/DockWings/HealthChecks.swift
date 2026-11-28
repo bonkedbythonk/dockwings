@@ -141,27 +141,29 @@ enum HealthChecks {
             }
         }
         walk(root, 0)
-        let now = Date()
-        return repos.compactMap { repo in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            task.arguments = ["-C", repo.path, "status", "--porcelain", "-z", "--untracked-files=normal"]
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = FileHandle.nullDevice
-            guard (try? task.run()) != nil else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            task.waitUntilExit()
-            guard task.terminationStatus == 0 else { return nil }
-            // Entries are "XY path"; a rename is followed by its old path.
-            let entries = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { $0.count > 3 && $0.dropFirst(2).first == " " }
-            guard !entries.isEmpty else { return nil }
-            let newest = entries.compactMap { entry -> Date? in
-                let file = repo.appendingPathComponent(String(entry.dropFirst(3)))
-                return try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-            }.max() ?? .distantPast
-            return Repo(path: repo.path, changed: entries.count, untouched: now.timeIntervalSince(newest))
-        }
+        return repos.compactMap(status)
+    }
+
+    /// One repository's uncommitted changes, or nil when it's clean.
+    nonisolated static func status(_ repo: URL) -> Repo? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        task.arguments = ["-C", repo.path, "status", "--porcelain", "-z", "--untracked-files=normal"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        guard (try? task.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return nil }
+        // Entries are "XY path"; a rename is followed by its old path.
+        let entries = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { $0.count > 3 && $0.dropFirst(2).first == " " }
+        guard !entries.isEmpty else { return nil }
+        let newest = entries.compactMap { entry -> Date? in
+            let file = repo.appendingPathComponent(String(entry.dropFirst(3)))
+            return try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }.max() ?? .distantPast
+        return Repo(path: repo.path, changed: entries.count, untouched: Date().timeIntervalSince(newest))
     }
 
     // MARK: Process facts

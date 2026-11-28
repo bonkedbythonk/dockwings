@@ -5,7 +5,8 @@
 // 10 s or so (Force Quit), one app using 6 GB of memory or more, an app that kept
 // the Mac awake while you were away 10 min, a dev server of yours listening
 // for 2 h (Stop), and a project with changes not committed for a day
-// (worked on in the last two weeks). Worst
+// (worked on in the last two weeks; the one on show re-checked every
+// minute). Worst
 // one wins; "Ignore" hides it until the problem changes (projects: also
 // across restarts). CPU use comes from each process's CPU time (proc_pid_rusage) every
 // 5 s, in process and cheap; processes of other users (root daemons) can't be
@@ -159,7 +160,7 @@ final class Health: ObservableObject {
         if tick % 2 == 0 { checkApps() }
         if tick % 6 == 0 { checkMemory(); checkAwake() }
         if tick % 12 == 2 { checkServers() }
-        if tick % 720 == 24 { checkRepos() }
+        if tick % 720 == 24 { checkRepos() } else if tick % 12 == 7, repo != nil { recheckRepo() }
         tick += 1
         evaluate()
     }
@@ -217,6 +218,16 @@ final class Health: ObservableObject {
             // Forgotten recent work: untouched for a day, but worked on in the last two weeks.
             let found = HealthChecks.staleRepos().filter { $0.untouched >= 86_400 && $0.untouched < 14 * 86_400 }.min { $0.untouched < $1.untouched }
             DispatchQueue.main.async { MainActor.assumeIsolated { self.repo = found; self.evaluate() } }
+        }
+    }
+
+    /// The project on show, every minute: once committed, it goes (and the
+    /// next one, if any, comes up).
+    private func recheckRepo() {
+        guard let shown = repo else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let still = HealthChecks.status(URL(fileURLWithPath: shown.path)) != nil
+            DispatchQueue.main.async { MainActor.assumeIsolated { if !still { self.checkRepos() } } }
         }
     }
 
