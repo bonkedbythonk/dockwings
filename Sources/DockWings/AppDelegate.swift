@@ -128,7 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard Config.bar, let wing = rightWing else { return nil }
             let starts = pointer.right.frames.filter { plan.side(of: $0.key) == .right }.map { todoPanel.frame.minX + $0.value.minX }
             let end = (starts.min() ?? wing.maxX) - 20
-            let start = wing.minX + 8
+            // The separator line, just left of the wing (measured at tile size 54).
+            let start = wing.minX - 12
             return end > start ? start...end : nil
         }
         notchPanel = StripPanel(NotchView())

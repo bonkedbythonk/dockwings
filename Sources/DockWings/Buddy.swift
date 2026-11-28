@@ -19,10 +19,11 @@
 // play / pause, volume, Claude needing you / done / denied, notch alerts,
 // headphones, the charger, a download or screenshot, a copy, an app opening,
 // WaniKani reviews done, a todo ticked off, a file dragged (one follows it).
-// Dock bar: when the Dock end of the right wing has stayed empty a while, a
-// small drawn door opens there and up to three guests walk out and sit
-// (`doorGuests`, pack paths, else others from the shelf; never ones out); when a widget needs the room they walk back in
-// and the door goes. They only sit: no brain, no reactions, not clickable.
+// Dock bar: when the Dock end of the right wing has stayed empty a while, up
+// to three guests step out of the Dock's separator line there and sit
+// (`doorGuests`, pack paths, else others from the shelf; never ones out); when
+// a widget needs the room they walk back into the line. They only sit: no
+// brain, no reactions, not clickable.
 // Test aids: `BuddyTest all` (or a part: `window`, `climb`, `claude`...) runs
 // every behaviour in turn and writes
 // ~/Library/Logs/DockWings/buddy.log (`BuddyLog 1` logs without the script).
@@ -242,7 +243,7 @@ private final class Mascot {
     var fleeAfter = Date.distantPast
     /// Last reaction to something happening (a few seconds apart at most).
     var reactedAt = Date.distantPast
-    /// Came out of the door: walks to a seat and sits, nothing more.
+    /// Came out of the separator line: walks to a seat and sits, nothing more.
     var guest = false
 
     var name: String { pack.name }
@@ -355,12 +356,14 @@ final class Buddy {
     var guestRoom: (() -> ClosedRange<CGFloat>?)?
     private var guests: [Mascot] = []
     private var guestPacks: [String: ShimejiPack] = [:]
-    private let door = DoorLayer()
-    /// Since when the room has been free (the door waits for it to stay so).
+    /// Holds the guests; its mask hides them left of the line.
+    private let stage = CALayer()
+    private let curtain = CALayer()
+    /// Since when the room has been free (guests wait for it to stay so).
     private var roomSince: Date?
-    /// The door's x and the room's end while guests are out.
-    private var doorX: CGFloat = 0
-    private var doorOut = false
+    /// The Dock's separator line (panel x) the guests came out of.
+    private var lineX: CGFloat = 0
+    private var guestsOut = false
 
     init(music: Music, claude: ClaudeStatus, latest: Latest, batteries: Batteries,
          clipboard: Clipboard, todos: Todos, wanikani: WaniKani) {
@@ -507,7 +510,7 @@ final class Buddy {
             windowWatch?.invalidate()
             windowWatch = nil
             for m in mascots { stop(m) }
-            clearDoor()
+            clearGuests()
         }
     }
 
@@ -544,25 +547,24 @@ final class Buddy {
         m.sprite.removeAllAnimations()
     }
 
-    // MARK: The door
+    // MARK: Guests
 
-    /// Once a second: opens the door when the room has stayed free for 10 s,
-    /// sends the guests back in as soon as a widget needs it.
-    private func checkDoor() {
+    /// Once a second: brings the guests out when the room has stayed free for
+    /// 10 s, sends them back in as soon as a widget needs it.
+    private func checkGuests() {
         let f = panel.frame
         let room = guestRoom?().map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
         let slot = size * 1.1
-        let fits = room.map { $0.upperBound - $0.lowerBound >= door.width + 12 + slot } ?? false
+        let fits = room.map { $0.upperBound - $0.lowerBound >= 12 + slot } ?? false
         roomSince = fits ? (roomSince ?? Date()) : nil
-        if doorOut {
+        if guestsOut {
             // Leave when the room shrinks past a guest or the wing moves.
-            let seats = guests.map(\.state.position.x)
-            guard let room, fits, abs(room.lowerBound + door.width / 2 + 4 - doorX) < 4,
-                  seats.allSatisfy({ $0 + slot / 2 <= room.upperBound }) else { sendGuestsBack(); return }
+            guard let room, fits, abs(room.lowerBound - lineX) < 4,
+                  guests.allSatisfy({ $0.state.position.x + slot / 2 <= room.upperBound }) else { sendGuestsBack(); return }
             return
         }
         guard let room, let since = roomSince, Date().timeIntervalSince(since) >= 10, let y = floor else { return }
-        let count = min(3, Int((room.upperBound - room.lowerBound - door.width - 12) / slot))
+        let count = min(3, Int((room.upperBound - room.lowerBound - 12) / slot))
         let out = Set(BuddyRoster.paths)
         // The chosen guests (`doorGuests`, pack paths) in order, else others from the shelf.
         let chosen = UserDefaults.standard.stringArray(forKey: "doorGuests")
@@ -574,54 +576,50 @@ final class Buddy {
             return (path, p)
         }
         guard !packs.isEmpty else { return }
-        doorOut = true
-        doorX = room.lowerBound + door.width / 2 + 4
-        if door.superlayer == nil { view.layer?.insertSublayer(door, at: 0) }
-        door.show(at: CGPoint(x: doorX, y: y + 2), scale: screen?.backingScaleFactor ?? 2)
-        BuddyLog.write("door opens for \(packs.map(\.1.name))")
-        let start = doorX + door.width / 2 + 12
+        guestsOut = true
+        lineX = room.lowerBound
+        // Guests are only drawn right of the line, so they step out of it.
+        if stage.superlayer == nil { view.layer?.insertSublayer(stage, at: 0) }
+        without {
+            stage.frame = view.bounds
+            curtain.frame = CGRect(x: lineX, y: 0, width: view.bounds.width - lineX, height: view.bounds.height)
+            curtain.backgroundColor = NSColor.black.cgColor
+            stage.mask = curtain
+        }
+        BuddyLog.write("guests come out: \(packs.map(\.1.name))")
+        let behind = lineX - size * 0.7
         for (i, (path, pack)) in packs.enumerated() {
-            let seat = start + slot * (CGFloat(i) + 0.5) + CGFloat.random(in: -6...6)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5 + Double(i) * 0.9) { [weak self] in
-                guard let self, self.doorOut, self.live else { return }
-                let m = Mascot(path: path, pack: pack, at: CGPoint(x: self.doorX, y: y))
+            let seat = lineX + 12 + slot * (CGFloat(i) + 0.5) + CGFloat.random(in: -6...6)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.9) { [weak self] in
+                guard let self, self.guestsOut, self.live else { return }
+                let m = Mascot(path: path, pack: pack, at: CGPoint(x: behind, y: y))
                 m.guest = true
                 m.placed = true
-                self.view.layer?.addSublayer(m.holder)
+                self.stage.addSublayer(m.holder)
                 self.guests.append(m)
                 self.resize(m)
                 without { m.holder.position = m.state.position }
                 let speed = max(m.moves.action("Walk").speed(size: self.size), self.size * 0.2)
-                self.run(m, [.face(right: true), .move("Walk", to: CGPoint(x: seat, y: y), seconds: Double((seat - self.doorX) / speed)),
+                self.run(m, [.face(right: true), .move("Walk", to: CGPoint(x: seat, y: y), seconds: Double((seat - behind) / speed)),
                              .play(m.moves.has("Sit") ? "Sit" : "Stand", seconds: 0.1)])
-                if i == packs.count - 1 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { if self.doorOut { self.door.swing(open: false) } }
-                }
             }
         }
     }
 
-    /// A guest reached its seat (stays sitting) or the door (goes in).
+    /// A guest reached its seat (stays sitting) or the line (goes in).
     private func guestArrived(_ m: Mascot) {
-        guard !doorOut else { return }
+        guard !guestsOut else { return }
         m.holder.removeFromSuperlayer()
         guests.removeAll { $0 === m }
-        if guests.isEmpty {
-            door.swing(open: false)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self, !self.doorOut, self.guests.isEmpty else { return }
-                self.door.hide()
-            }
-        }
     }
 
-    /// Back through the door, quickly: a widget is coming.
+    /// Back into the line, quickly: a widget is coming.
     private func sendGuestsBack() {
-        doorOut = false
+        guestsOut = false
         roomSince = nil
         BuddyLog.write("guests go back in")
-        guard !guests.isEmpty, let y = floor else { door.hide(); return }
-        door.swing(open: true)
+        guard let y = floor else { return }
+        let behind = lineX - size * 0.7
         for m in guests {
             let here = m.position
             stop(m)
@@ -629,16 +627,15 @@ final class Buddy {
             without { m.holder.position = here }
             let gait = m.moves.has("Run") ? "Run" : "Walk"
             let speed = max(m.moves.action(gait).speed(size: size), size * 0.3)
-            run(m, [.face(right: false), .move(gait, to: CGPoint(x: doorX, y: y), seconds: Double(max(0, here.x - doorX) / speed))])
+            run(m, [.face(right: false), .move(gait, to: CGPoint(x: behind, y: y), seconds: Double(max(0, here.x - behind) / speed))])
         }
     }
 
-    private func clearDoor() {
-        doorOut = false
+    private func clearGuests() {
+        guestsOut = false
         roomSince = nil
         for m in guests { stop(m); m.holder.removeFromSuperlayer() }
         guests = []
-        door.hide()
     }
 
     // MARK: The world
@@ -738,7 +735,7 @@ final class Buddy {
         s.batteryX = s.lowBattery ? widgetX?("batteries").map { $0 - f.minX } : nil
         s.attentionX = Date() < attentionUntil ? widgetX?("latest").map { $0 - f.minX } : nil
         signals = s
-        checkDoor()
+        checkGuests()
         // Sleepers wake as soon as the Mac is used.
         for m in mascots where m.state.asleep && effective(for: m).idleSeconds < 3 { wake(m) }
         // Now and then someone chases the pointer while it is low near the Dock.
