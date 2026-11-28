@@ -943,7 +943,17 @@ final class Buddy {
         stop(m)
         m.state.position = p
         without { m.holder.position = p }
-        run(m, Brain.decide(m.state, world: w, signals: effective(for: m), moves: m.moves, dice: &m.dice))
+        run(m, Brain.decide(m.state, world: apart(w, for: m), signals: effective(for: m), moves: m.moves, dice: &m.dice))
+    }
+
+    /// The world as one buddy sees it: the others' spots (guests included)
+    /// count as places not to stop, so nobody sits in someone else.
+    private func apart(_ w: World, for m: Mascot) -> World {
+        var w = w
+        let half = size * 0.3
+        w.widgets += (mascots + guests).filter { $0 !== m && $0.state.surface == .floor }
+            .map { ($0.state.position.x - half)...($0.state.position.x + half) }
+        return w
     }
 
     private func wake(_ m: Mascot) {
@@ -966,7 +976,7 @@ final class Buddy {
             m.doing = nil
             if m.guest { guestArrived(m); return }
             if let w = currentWorld() {
-                run(m, Brain.decide(m.state, world: w, signals: effective(for: m), moves: m.moves, dice: &m.dice))
+                run(m, Brain.decide(m.state, world: apart(w, for: m), signals: effective(for: m), moves: m.moves, dice: &m.dice))
             }
             return
         }
