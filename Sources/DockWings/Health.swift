@@ -1,8 +1,13 @@
 // Mac health widget: shows only when something is wrong. One process using
 // most of a core (80% or more) for a minute, memory pressure at critical,
 // under 10 GB of disk left, or macOS reporting the Mac as hot (thermal state
-// serious or critical). Worst one wins; "Ignore" hides it until the problem
-// changes. CPU use comes from each process's CPU time (proc_pid_rusage) every
+// serious or critical). Also (HealthChecks.swift): an app not responding for
+// 10 s (Force Quit), one app using 6 GB of memory or more, an app that kept
+// the Mac awake while you were away 10 min, a dev server of yours listening
+// for 2 h (Stop), and a project with changes not committed for a day
+// (worked on in the last two weeks). Worst
+// one wins; "Ignore" hides it until the problem changes (projects: also
+// across restarts). CPU use comes from each process's CPU time (proc_pid_rusage) every
 // 5 s, in process and cheap; processes of other users (root daemons) can't be
 // read and are left out. Also feeds the Mac widget: battery time to 20% and
 // die temperature (Thermal), read every 30 s, and the busiest processes for
@@ -25,6 +30,9 @@ final class Health: ObservableObject {
         let subtitle: String
         let critical: Bool
         var pid: pid_t?
+        var hung = false
+        var port: Int?
+        var folder: String?
     }
 
     struct Proc: Identifiable, Equatable {
@@ -41,7 +49,19 @@ final class Health: ObservableObject {
     /// On battery with under 30 min to 20%, or already below 20%.
     @Published private(set) var needsCharge = false
 
-    private var dismissed: String?
+    private var dismissed: Set<String> = []
+    /// Ignored projects, kept across restarts ("git:<path>:<changed count>").
+    private var ignoredStore: String {
+        get { UserDefaults.standard.string(forKey: "ignoredHealth") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "ignoredHealth") }
+    }
+    private var stuckSince: [pid_t: Date] = [:]
+    private var answered: Set<pid_t> = []
+    private var checkingApps = false
+    private var memoryHog: (pid: pid_t, bytes: UInt64, since: Date)?
+    private var awake: (pid: pid_t, name: String)?
+    private var server: HealthChecks.Server?
+    private var repo: HealthChecks.Repo?
     private var lastTimes: [pid_t: UInt64] = [:]
     private var lastSample = Date()
     /// When each process went over the threshold, while it stays over.
@@ -91,8 +111,10 @@ final class Health: ObservableObject {
     }
 
     func ignore() {
-        dismissed = issue?.key
-        issue = nil
+        guard let key = issue?.key else { return }
+        dismissed.insert(key)
+        if key.hasPrefix("git:") { ignoredStore = (ignoredStore.split(separator: "\n").map(String.init) + [key]).suffix(30).joined(separator: "\n") }
+        evaluate()
     }
 
     private func sample() {
@@ -125,8 +147,68 @@ final class Health: ObservableObject {
         lastUsage = usage
         if live { updateTop() }
         if tick % 60 == 0 { checkDisk() }
+        checkApps()
+        if tick % 6 == 0 { checkMemory(); checkAwake() }
+        if tick % 12 == 2 { checkServers() }
+        if tick % 720 == 24 { checkRepos() }
         tick += 1
         evaluate()
+    }
+
+    /// Regular apps that stop answering (off the main thread, one round at a time).
+    private func checkApps() {
+        guard !checkingApps else { return }
+        checkingApps = true
+        let pids = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.map(\.processIdentifier)
+        DispatchQueue.global(qos: .utility).async {
+            let result = HealthChecks.responsiveness(pids)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.checkingApps = false
+                    self.answered.formUnion(result.answered)
+                    let now = Date()
+                    self.stuckSince = Dictionary(uniqueKeysWithValues: result.stuck.filter { self.answered.contains($0) }.map { ($0, self.stuckSince[$0] ?? now) })
+                    self.evaluate()
+                }
+            }
+        }
+    }
+
+    private func checkMemory() {
+        let pids = Array(lastTimes.keys)
+        let top = HealthChecks.memoryByApp(pids).max { $0.value < $1.value }
+        if let top, top.value >= 6_000_000_000 {
+            memoryHog = (top.key, top.value, memoryHog?.pid == top.key ? memoryHog!.since : Date())
+        } else {
+            memoryHog = nil
+        }
+    }
+
+    /// Remembers who held off sleep while you were away 10 min; forgets once
+    /// it lets go.
+    private func checkAwake() {
+        let blockers = HealthChecks.sleepBlockers()
+        if let a = awake, blockers[a.pid] == nil { awake = nil }
+        let any = CGEventType(rawValue: ~0)!
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
+        if awake == nil, idle >= 600, let pid = blockers.keys.min() {
+            awake = (pid, HealthChecks.name(pid))
+        }
+    }
+
+    private func checkServers() {
+        DispatchQueue.global(qos: .utility).async {
+            let found = HealthChecks.servers().filter { Date().timeIntervalSince($0.started) >= 2 * 3600 }.min { $0.started < $1.started }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.server = found; self.evaluate() } }
+        }
+    }
+
+    private func checkRepos() {
+        DispatchQueue.global(qos: .utility).async {
+            // Forgotten recent work: untouched for a day, but worked on in the last two weeks.
+            let found = HealthChecks.staleRepos().filter { $0.untouched >= 86_400 && $0.untouched < 14 * 86_400 }.min { $0.untouched < $1.untouched }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.repo = found; self.evaluate() } }
+        }
     }
 
     private func updateTop() {
@@ -144,16 +226,39 @@ final class Health: ObservableObject {
             found.append(Issue(key: "heat\(heat.rawValue)", symbol: "thermometer.high", title: "Mac is hot",
                                subtitle: heat == .critical ? "Slowing down to cool" : "Running warm", critical: heat == .critical))
         }
+        if let (pid, since) = stuckSince.min(by: { $0.value < $1.value }), Date().timeIntervalSince(since) >= 10 {
+            found.append(Issue(key: "hung\(pid)", symbol: "hourglass", title: Self.name(pid), subtitle: "Not responding",
+                               critical: false, pid: pid, hung: true))
+        }
         if let hog = hogs.first {
             found.append(Issue(key: "cpu\(hog.id)", symbol: "cpu", title: hog.name, subtitle: "Using \(hog.percent)% CPU",
                                critical: false, pid: hog.id))
         }
+        if let m = memoryHog, Date().timeIntervalSince(m.since) >= 60 {
+            found.append(Issue(key: "ram\(m.pid)", symbol: "memorychip", title: Self.name(m.pid),
+                               subtitle: "Using \(m.bytes / 1_000_000_000) GB of memory", critical: false, pid: m.pid))
+        }
+        if let a = awake {
+            found.append(Issue(key: "awake\(a.pid)", symbol: "cup.and.saucer", title: a.name, subtitle: "Kept the Mac awake", critical: false, pid: a.pid))
+        }
         if let gb = lowDisk {
             found.append(Issue(key: "disk", symbol: "internaldrive", title: "Disk almost full", subtitle: "\(gb) GB left", critical: gb < 3))
         }
-        let next = found.sorted { $0.critical && !$1.critical }.first
-        if next?.key != dismissed { dismissed = nil }
-        let shown = next?.key == dismissed ? nil : next
+        if let s = server {
+            let hours = Int(Date().timeIntervalSince(s.started) / 3600)
+            found.append(Issue(key: "port\(s.pid)", symbol: "server.rack", title: s.folder.map { ($0 as NSString).lastPathComponent } ?? s.command,
+                               subtitle: "\(s.command) on :\(s.port) · \(hours) h", critical: false, pid: s.pid, port: s.port))
+        }
+        if let r = repo {
+            let days = Int(r.untouched / 86_400)
+            found.append(Issue(key: "git:\(r.path):\(r.changed)", symbol: "arrow.triangle.branch", title: (r.path as NSString).lastPathComponent,
+                               subtitle: "\(r.changed) \(r.changed == 1 ? "file" : "files") not committed · \(days) \(days == 1 ? "day" : "days")",
+                               critical: false, folder: r.path))
+        }
+        // Ignored problems stay hidden while they last.
+        dismissed.formIntersection(found.map(\.key))
+        let stored = Set(ignoredStore.split(separator: "\n").map(String.init))
+        let shown = found.filter { !dismissed.contains($0.key) && !stored.contains($0.key) }.sorted { $0.critical && !$1.critical }.first
         if shown != issue { issue = shown }
     }
 
@@ -242,10 +347,19 @@ struct HealthView: View {
                 Circle().fill(issue.critical ? Color(red: 1, green: 0.42, blue: 0.38) : Color(red: 1, green: 0.72, blue: 0.3))
                     .frame(width: 7, height: 7).offset(x: -3, y: 2)
             }
-            .tapAction { Self.openActivityMonitor() }
+            .tapAction { Self.open(issue) }
             .contextMenu {
-                if let pid = issue.pid, let app = NSRunningApplication(processIdentifier: pid) {
-                    Button("Quit \(issue.title)") { app.terminate() }
+                if let port = issue.port, let pid = issue.pid {
+                    Button("Open localhost:\(port)") { Self.open(issue) }
+                    Button("Stop Server") { kill(pid, SIGTERM) }
+                } else if let folder = issue.folder {
+                    Button("Open in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }
+                } else if let pid = issue.pid, let app = NSRunningApplication(processIdentifier: pid) {
+                    if issue.hung {
+                        Button("Force Quit \(issue.title)") { app.forceTerminate() }
+                    } else {
+                        Button("Quit \(issue.title)") { app.terminate() }
+                    }
                 }
                 if issue.key == "disk" {
                     Button("Storage Settings") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) }
@@ -253,10 +367,17 @@ struct HealthView: View {
                 Button("Open Activity Monitor") { Self.openActivityMonitor() }
                 Button("Ignore") { health.ignore() }
             }
-            .help("Click to open Activity Monitor")
+            .help(issue.port != nil ? "Click to open it in the browser" : issue.folder != nil ? "Click to open the folder" : "Click to open Activity Monitor")
             .id(issue.key)
             .transition(.blurReplace)
         }
+    }
+
+    /// A click: the server in the browser, the project folder, else Activity Monitor.
+    static func open(_ issue: Health.Issue) {
+        if let port = issue.port, let url = URL(string: "http://localhost:\(port)") { NSWorkspace.shared.open(url) }
+        else if let folder = issue.folder { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }
+        else { openActivityMonitor() }
     }
 
     static func openActivityMonitor() {

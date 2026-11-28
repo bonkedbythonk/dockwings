@@ -329,7 +329,7 @@ struct WingSide: View {
                      priority: wanikani.reviewing ? 8 : wanikani.celebrating ? 7 : !wanikani.hasWork ? 1 : wanikani.nudging ? 5 : 4,
                      bump: "\(wanikani.doneToday)\(wanikani.lessonsToday)\(wanikani.nudging)\(wanikani.celebrating)\(wanikani.reviewing)") { WaniKaniView(wk: wanikani) }
                 .compact { WaniKaniView(wk: wanikani, compact: true) },
-            WingItem("health", .left, show: health.issue != nil, priority: health.issue?.critical == true ? 8 : 5,
+            WingItem("health", .left, show: health.issue != nil, priority: health.issue?.critical == true ? 8 : health.issue?.folder != nil || health.issue?.port != nil ? 2 : 5,
                      bump: health.issue?.key) { HealthView(health: health) },
             {
                 // With the Dock bar a playing track lives in the notch; the
