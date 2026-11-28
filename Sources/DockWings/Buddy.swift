@@ -446,9 +446,9 @@ final class Buddy {
         if let screen {
             if panel.frame != screen.frame { panel.setFrame(screen.frame, display: false) }
             if !panel.isVisible { panel.orderFrontRegardless() }
-            // Dock bar: on the Dock's inner bottom, like the icons (the glass
+            // Dock bar: on the Dock's bottom line (the glass
             // starts 5 pt up); otherwise the very bottom of the screen.
-            let line: CGFloat = Config.bar ? 12 : 0
+            let line: CGFloat = Config.bar ? 6 : 0
             if floor != line { floor = line }
         } else {
             floor = nil
