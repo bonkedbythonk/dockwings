@@ -110,6 +110,15 @@ final class Health: ObservableObject {
         })
     }
 
+    /// Stops a dev server and drops it from the widget at once (servers are
+    /// otherwise checked once a minute).
+    func stop(_ pid: pid_t) {
+        kill(pid, SIGTERM)
+        if server?.pid == pid { server = nil }
+        evaluate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.checkServers() }
+    }
+
     func ignore() {
         guard let key = issue?.key else { return }
         dismissed.insert(key)
@@ -351,7 +360,7 @@ struct HealthView: View {
             .contextMenu {
                 if let port = issue.port, let pid = issue.pid {
                     Button("Open localhost:\(port)") { Self.open(issue) }
-                    Button("Stop Server") { kill(pid, SIGTERM) }
+                    Button("Stop Server") { health.stop(pid) }
                 } else if let folder = issue.folder {
                     Button("Open in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }
                 } else if let pid = issue.pid, let app = NSRunningApplication(processIdentifier: pid) {
