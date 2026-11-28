@@ -2,7 +2,7 @@
 // most of a core (80% or more) for a minute, memory pressure at critical,
 // under 10 GB of disk left, or macOS reporting the Mac as hot (thermal state
 // serious or critical). Also (HealthChecks.swift): an app not responding for
-// 10 s (Force Quit), one app using 6 GB of memory or more, an app that kept
+// 10 s or so (Force Quit), one app using 6 GB of memory or more, an app that kept
 // the Mac awake while you were away 10 min, a dev server of yours listening
 // for 2 h (Stop), and a project with changes not committed for a day
 // (worked on in the last two weeks). Worst
@@ -156,7 +156,7 @@ final class Health: ObservableObject {
         lastUsage = usage
         if live { updateTop() }
         if tick % 60 == 0 { checkDisk() }
-        checkApps()
+        if tick % 2 == 0 { checkApps() }
         if tick % 6 == 0 { checkMemory(); checkAwake() }
         if tick % 12 == 2 { checkServers() }
         if tick % 720 == 24 { checkRepos() }

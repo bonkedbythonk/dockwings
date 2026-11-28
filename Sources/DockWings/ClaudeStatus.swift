@@ -74,7 +74,12 @@ final class ClaudeStatus: ObservableObject {
     private func dropSeen() {
         for (id, session) in sessions where session.state == .done && !notInApp.contains(id) {
             guard desktopID(for: id) != nil else { notInApp.insert(id); continue }  // a terminal chat
-            guard let file = desktopFiles[id], let data = try? Data(contentsOf: file),
+            // Only read a session file again once it has changed.
+            guard let file = desktopFiles[id],
+                  let changed = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  changed != seenDates[id] else { continue }
+            seenDates[id] = changed
+            guard let data = try? Data(contentsOf: file),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let focused = (json["lastFocusedAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? .distantPast
             if focused > session.updated || json["isArchived"] as? Bool == true { sessions[id] = nil }
@@ -196,6 +201,7 @@ final class ClaudeStatus: ObservableObject {
 
     private var desktopIDs: [String: String] = [:]
     private var desktopFiles: [String: URL] = [:]
+    private var seenDates: [String: Date] = [:]
     private var notInApp: Set<String> = []
 
     private func desktopID(for cliID: String) -> String? {
@@ -414,9 +420,19 @@ struct ClaudeMark: View {
         return (h / 7 + slot) % count
     }
 
+    /// Ticks only when the variant can change (every 10 to 16 s), not every
+    /// second: each tick redraws the wing.
+    private var schedule: PeriodicTimelineSchedule {
+        let h = abs(seed.hashValue)
+        let period = Double(10 + h % 7), offset = Double(h % 97)
+        let now = Date().timeIntervalSinceReferenceDate
+        let start = ((now + offset) / period).rounded(.down) * period - offset
+        return .periodic(from: Date(timeIntervalSinceReferenceDate: start), by: period)
+    }
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let v = variant(at: context.date)
+        TimelineView(schedule) { context in
+            let v = variant(at: context.date.addingTimeInterval(0.01))
             ZStack {
                 MarkLayer(kind: kind, variant: v, seed: seed)
                     .frame(width: 34, height: 34)

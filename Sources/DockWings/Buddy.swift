@@ -354,6 +354,8 @@ final class Buddy {
     /// Dock bar: the empty stretch at the Dock end of the right wing (screen
     /// x), nil when there is none.
     var guestRoom: (() -> ClosedRange<CGFloat>?)?
+    private var front: Platform?
+    private var frontRead = Date.distantPast
     private var guests: [Mascot] = []
     private var guestPacks: [String: ShimejiPack] = [:]
     /// Holds the guests; its mask hides them left of the line.
@@ -652,7 +654,9 @@ final class Buddy {
         }
         w.dock = dockIcons.map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
         w.widgets = (widgetSpans?() ?? []).map { ($0.lowerBound - f.minX)...($0.upperBound - f.minX) }
-        w.windows = frontWindow().map { [$0] } ?? []
+        // The window list is costly: read at most once a second.
+        if Date().timeIntervalSince(frontRead) > 0.9 || testWindow != nil { front = frontWindow(); frontRead = Date() }
+        w.windows = front.map { [$0] } ?? []
         if let d = drawerPlatform() { w.windows.append(d) }
         if let n = notchPlatform() { w.windows.append(n) }
         // Windows someone stands on stay platforms even when another window

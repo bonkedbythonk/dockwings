@@ -574,17 +574,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var screenshotTimer: Timer?
+    private var fastWatch: Timer?
+    private var capturePid: pid_t?
+    private var captureObserver: AXObserver?
 
+    /// The screenshot UI stays running once used, so its thumbnail is watched
+    /// by event: a window it opens starts a quick poll (0.15 s) that ends when
+    /// the thumbnail is gone. A slow poll (1 s) backs that up.
     private func updateScreenshotWatch() {
-        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.screencaptureui").isEmpty
-        if running, screenshotTimer == nil {
-            screenshotTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [unowned self] _ in
-                MainActor.assumeIsolated { self.watchScreenshotThumbnail() }
+        let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.screencaptureui").first?.processIdentifier
+        guard pid != capturePid else { return }
+        capturePid = pid
+        screenshotTimer?.invalidate()
+        screenshotTimer = nil
+        if let observer = captureObserver {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+            captureObserver = nil
+        }
+        guard let pid else { watchScreenshotThumbnail(); return }
+        screenshotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [unowned self] _ in
+            MainActor.assumeIsolated { self.watchScreenshotThumbnail(); if Presence.shared.screenshotThumbnail { self.watchQuickly() } }
+        }
+        var observer: AXObserver?
+        guard AXObserverCreate(pid, { _, _, _, refcon in
+            guard let refcon else { return }
+            let me = Unmanaged<AppDelegate>.fromOpaque(refcon).takeUnretainedValue()
+            MainActor.assumeIsolated { me.watchQuickly() }
+        }, &observer) == .success, let observer else { return }
+        AXObserverAddNotification(observer, AXUIElementCreateApplication(pid), kAXWindowCreatedNotification as CFString,
+                                  Unmanaged.passUnretained(self).toOpaque())
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+        captureObserver = observer
+    }
+
+    /// Polls quickly while a thumbnail may be up; stops once it has gone (or
+    /// none came within 3 s).
+    private func watchQuickly() {
+        guard fastWatch == nil else { return }
+        let start = Date()
+        watchScreenshotThumbnail()
+        fastWatch = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [unowned self] timer in
+            MainActor.assumeIsolated {
+                self.watchScreenshotThumbnail()
+                if !Presence.shared.screenshotThumbnail, Date().timeIntervalSince(start) > 3 {
+                    timer.invalidate()
+                    self.fastWatch = nil
+                }
             }
-        } else if !running {
-            screenshotTimer?.invalidate()
-            screenshotTimer = nil
-            watchScreenshotThumbnail()
         }
     }
 
@@ -669,9 +705,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func watchScreenshotThumbnail() {
         var frame: CGRect?
-        let showing = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.screencaptureui").contains { app in
+        let showing = [capturePid].compactMap { $0 }.contains { pid in
             var value: CFTypeRef?
-            let element = AXUIElementCreateApplication(app.processIdentifier)
+            let element = AXUIElementCreateApplication(pid)
             guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
                   let windows = value as? [AXUIElement] else { return false }
             return windows.contains { window in
