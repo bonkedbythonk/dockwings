@@ -506,8 +506,6 @@ struct MusicView: View {
                 .frame(width: textWidth, alignment: .leading)
                 .clipped()
                 .tapAction { Drawers.shared.toggle("music") }
-                // Not clipped: the mix glow spills past the bar.
-                if music.duration > 0 { ProgressBar(music: music) }
             }
             .lineLimit(1)
             .truncationMode(.tail)
