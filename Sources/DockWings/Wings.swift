@@ -86,6 +86,8 @@ final class WingPlan: ObservableObject {
     /// When each compact widget may grow back at the earliest.
     private var compactUntil: [String: Date] = [:]
     private var regrowPending = false
+    /// The widgets shown when something last had to shrink.
+    private var crowd: Set<String> = []
     static let compactHold: TimeInterval = 20
 
     /// Measured width of a widget as shown: compact or full.
@@ -201,10 +203,14 @@ final class WingPlan: ObservableObject {
         // first, until everything fits or none is left to shrink. Shrinking
         // that brings no widget back onto the main page is undone. A widget
         // shrinks at once but grows back only after the room has stayed free
-        // for a while, so the wing doesn't flip back and forth.
+        // for a while, so the wing doesn't flip back and forth (or at once when a widget leaves).
         let now = Date()
         let shrinkable = items.filter { $0.compact != nil && widths[$0.id + "~compact"] != nil }
             .sorted { $0.priority < $1.priority }
+        // A widget that took the room has left (music moved to the notch, a
+        // screenshot dragged away): the shrunk ones grow back at once.
+        let ids = Set(items.map(\.id))
+        if !crowd.isSubset(of: ids) { compactUntil = [:]; crowd = [] }
         let held = Set(shrinkable.map(\.id).filter { (compactUntil[$0] ?? .distantPast) > now })
         func missing(_ placed: [String: Side]) -> Int { items.filter { placed[$0.id] == nil && !$0.onlyIfRoom }.count }
         func choose(from start: Set<String>) -> (placed: [String: Side], compacted: Set<String>) {
@@ -220,6 +226,7 @@ final class WingPlan: ObservableObject {
         }
         let needed = choose(from: []).compacted
         for id in needed { compactUntil[id] = now.addingTimeInterval(Self.compactHold) }
+        if !needed.isEmpty { crowd = ids }
         let (placed, chosen) = choose(from: needed.union(held))
         compacted = chosen
         // Held ones grow back once their time is up: draw again then.
