@@ -159,12 +159,17 @@ enum HealthChecks {
         // Entries are "XY path"; a rename is followed by its old path.
         let entries = data.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }.filter { $0.count > 3 && $0.dropFirst(2).first == " " }
         guard !entries.isEmpty else { return nil }
-        // A new folder is one entry ("dir/"): the newest file inside counts.
-        let key: Set<URLResourceKey> = [.contentModificationDateKey]
+        // A new folder is one entry ("dir/"): the newest visible file inside
+        // counts (not folder dates, not a nested clone's .git).
+        let key: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey]
         let newest = entries.flatMap { entry -> [Date] in
             let file = repo.appendingPathComponent(String(entry.dropFirst(3)))
-            let inside = entry.hasSuffix("/") ? (FileManager.default.enumerator(at: file, includingPropertiesForKeys: Array(key))?.allObjects as? [URL] ?? []) : []
-            return ([file] + inside).compactMap { try? $0.resourceValues(forKeys: key).contentModificationDate }
+            guard entry.hasSuffix("/") else { return [try? file.resourceValues(forKeys: key).contentModificationDate].compactMap { $0 } }
+            let inside = FileManager.default.enumerator(at: file, includingPropertiesForKeys: Array(key), options: .skipsHiddenFiles)?.allObjects as? [URL] ?? []
+            return inside.compactMap { url in
+                guard let values = try? url.resourceValues(forKeys: key), values.isRegularFile == true else { return nil }
+                return values.contentModificationDate
+            }
         }.max() ?? .distantPast
         return Repo(path: repo.path, changed: entries.count, untouched: Date().timeIntervalSince(newest))
     }
