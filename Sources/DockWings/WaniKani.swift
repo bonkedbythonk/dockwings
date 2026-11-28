@@ -14,6 +14,7 @@
 // the drawer show the tile with their progress the same way. Meanwhile the
 // wing leaves the widget out; a click on the notch opens the drawer.
 import AppKit
+import Combine
 import Security
 import SwiftUI
 
@@ -82,9 +83,13 @@ final class WaniKani: ObservableObject {
     }
     private var reviewsShown: String? { didSet { syncInNotch() } }
     /// The notch shows the tile (reviews or lessons): the wing leaves it out.
+    /// Only while it is the notch's current alert: queued behind the music,
+    /// it would be in neither place.
     @Published private(set) var inNotch = false
+    private var notchFeed: AnyCancellable?
     private func syncInNotch() {
         let on = (reviewsShown != nil || lessonsShown != nil) && Notch.alertsOn && Notch.locate() != nil
+            && Notch.shared.alert?.id.hasPrefix("wk-") == true
         if inNotch != on { inNotch = on }
     }
 
@@ -134,6 +139,11 @@ final class WaniKani: ObservableObject {
     }
 
     init() {
+        DispatchQueue.main.async {
+            self.notchFeed = Notch.shared.$alert.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.syncInNotch() }
+            }
+        }
         if Config.demo == "a" {
             reviews = 42; lessons = 5; level = 7; connected = true; doneToday = 6
             let hour = Calendar.current.dateInterval(of: .hour, for: Date())!.start
