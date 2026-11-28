@@ -2,7 +2,7 @@
 // most of a core (80% or more) for a minute, memory pressure at critical,
 // under 10 GB of disk left, or macOS reporting the Mac as hot (thermal state
 // serious or critical). Also (HealthChecks.swift): an app not responding for
-// 10 s or so (Force Quit), one app using 6 GB of memory or more, an app that kept
+// 10 s or so (Force Quit), one app using 6 GB of memory or more (not Claude), an app that kept
 // the Mac awake while you were away 10 min, a dev server of yours listening
 // for 2 h (Stop), and a project with changes not committed for a day
 // (worked on in the last two weeks; the one on show re-checked every
@@ -186,7 +186,8 @@ final class Health: ObservableObject {
 
     private func checkMemory() {
         let pids = Array(lastTimes.keys)
-        let top = HealthChecks.memoryByApp(pids).max { $0.value < $1.value }
+        // Claude is heavy on purpose while you use it.
+        let top = HealthChecks.memoryByApp(pids).filter { HealthChecks.name($0.key) != "Claude" }.max { $0.value < $1.value }
         if let top, top.value >= 6_000_000_000 {
             memoryHog = (top.key, top.value, memoryHog?.pid == top.key ? memoryHog!.since : Date())
         } else {
