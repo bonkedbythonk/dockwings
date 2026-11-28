@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Dock bar: apps dragged in among the spacers (screen x).
     private var barHoles: [ClosedRange<CGFloat>] = []
+    /// Dock bar: the right wing's region on screen (the door's room is in it).
+    private var rightWing: NSRect?
 
     /// Space between the Dock and a panel.
     private let gap: CGFloat = 12
@@ -121,6 +123,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return barHoles + [(Side.left, pointer.left, musicPanel!), (.right, pointer.right, todoPanel!)].flatMap { side, wing, panel in
                 wing.frames.filter { plan.side(of: $0.key) == side }.map { (panel.frame.minX + $0.value.minX)...(panel.frame.minX + $0.value.maxX) }
             }
+        }
+        buddy.guestRoom = { [unowned self] in
+            guard Config.bar, let wing = rightWing else { return nil }
+            let starts = pointer.right.frames.filter { plan.side(of: $0.key) == .right }.map { todoPanel.frame.minX + $0.value.minX }
+            let end = (starts.min() ?? wing.maxX) - 20
+            let start = wing.minX + 8
+            return end > start ? start...end : nil
         }
         notchPanel = StripPanel(NotchView())
         // Above the menu bar (24), so the ears draw over it.
@@ -416,7 +425,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rightRegion = NSRect(x: gaps.right.minX, y: d.minY, width: gaps.right.width, height: height)
             holes[.left] = gaps.leftHoles.map { ($0.minX - leftRegion.minX)...($0.maxX - leftRegion.minX) }
             holes[.right] = gaps.rightHoles.map { ($0.minX - rightRegion.minX)...($0.maxX - rightRegion.minX) }
+            rightWing = gaps.rightHoles.isEmpty ? rightRegion : nil
         } else {
+            rightWing = nil
             let leftWidth = d.minX - screen.minX - 2 * gap
             let rightWidth = screen.maxX - d.maxX - 2 * gap
             leftRegion = NSRect(x: d.minX - gap - leftWidth, y: d.minY, width: leftWidth, height: height)
